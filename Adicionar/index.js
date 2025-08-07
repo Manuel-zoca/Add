@@ -64,6 +64,30 @@ async function connectToWhatsApp() {
     }
   });
 
+  // ✅ Log de mensagens recebidas em grupos
+  sock.ev.on("messages.upsert", async (msgUpdate) => {
+    const messages = msgUpdate.messages;
+    if (!messages || !messages[0]) return;
+
+    const msg = messages[0];
+    const from = msg.key.remoteJid;
+    const sender = msg.key.participant || (msg.key.fromMe ? "você" : msg.pushName || "desconhecido");
+    const messageContent =
+      msg.message?.conversation ||
+      msg.message?.extendedTextMessage?.text ||
+      "[mensagem não textual]";
+
+    const isGroup = from.endsWith("@g.us");
+
+    if (isGroup) {
+      console.log("📨 Mensagem recebida em grupo:");
+      console.log("➡️ Grupo ID:", from);
+      console.log("👤 Remetente:", sender);
+      console.log("💬 Mensagem:", messageContent);
+      console.log("--------------------------------------------------");
+    }
+  });
+
   return sock;
 }
 
@@ -247,6 +271,23 @@ app.get("/qr", (req, res) => {
     res.send(html);
   } else {
     res.send("QR Code ainda não gerado. Tente novamente em alguns segundos.");
+  }
+});
+
+// ---------------------------- Rota para listar grupos ----------------------------
+
+app.get("/grupos", async (req, res) => {
+  try {
+    const chats = await sock.groupFetchAllParticipating();
+    const grupos = Object.values(chats).map((grupo) => ({
+      id: grupo.id,
+      nome: grupo.subject,
+    }));
+
+    res.json({ grupos });
+  } catch (err) {
+    console.error("❌ Erro ao buscar grupos:", err);
+    res.status(500).json({ error: "Erro ao buscar grupos." });
   }
 });
 
