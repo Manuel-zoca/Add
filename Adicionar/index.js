@@ -15,20 +15,19 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
-// ✅ Use a porta fornecida pelo Render
 const PORT = process.env.PORT || 3000;
 
-// ✅ Middleware corrigido
+// Middleware
 app.use(
   cors({
-    origin: true, // Aceita qualquer origem (ou coloque seu domínio)
+    origin: true,
     credentials: true,
   })
 );
 app.use(express.json({ limit: "10mb" }));
 app.use(express.static("public"));
 
-// Estado
+// Estado global
 let sock;
 let ultimoQRCodeBase64 = null;
 const FILA_PATH = "./fila.json";
@@ -102,7 +101,7 @@ async function connectToWhatsApp() {
         const qrImage = await QRCode.toDataURL(qr);
         ultimoQRCodeBase64 = qrImage;
         broadcast({ type: "qr_code", qr: qrImage });
-        console.log("📱 QR Code gerado. Acesse /qr para escanear.");
+        console.log("📱 QR Code gerado. Escaneie em /qr");
       } catch (err) {
         console.error("❌ Erro ao gerar QR Code:", err);
       }
@@ -157,9 +156,12 @@ async function processarFila() {
     groupId,
   });
 
+  // ✅ Declaração correta de resultadosMini
+  let resultadosMini = [];
+
   for (let i = 0; i < miniLotes.length; i++) {
     const miniLote = miniLotes[i];
-    const resultadosMini = [];
+    const resultadosDoMini = []; // ✅ Variável corrigida
 
     for (const num of miniLote) {
       broadcast({ type: "adding_now", numberAtual: num });
@@ -167,7 +169,7 @@ async function processarFila() {
       try {
         const isAlready = await isMember(groupId, num);
         if (isAlready) {
-          resultadosMini.push({ number: num, status: "já está no grupo" });
+          resultadosDoMini.push({ number: num, status: "já está no grupo" });
           continue;
         }
 
@@ -179,18 +181,18 @@ async function processarFila() {
 
         const result = response[0];
         if (result.status === 200) {
-          resultadosMini.push({ number: num, status: "adicionado com sucesso" });
+          resultadosDoMini.push({ number: num, status: "adicionado com sucesso" });
           totalAdicionados++;
         } else if (result.status === 403) {
-          resultadosMini.push({ number: num, status: "sem permissão para adicionar" });
+          resultadosDoMini.push({ number: num, status: "sem permissão para adicionar" });
         } else if (result.status === 408) {
-          resultadosMini.push({ number: num, status: "tempo esgotado" });
+          resultadosDoMini.push({ number: num, status: "tempo esgotado" });
         } else {
-          resultadosMini.push({ number: num, status: `erro ${result.status}` });
+          resultadosDoMini.push({ number: num, status: `erro ${result.status}` });
         }
       } catch (err) {
         console.error("❌ Erro ao adicionar", num, ":", err.message);
-        resultadosMini.push({
+        resultadosDoMini.push({
           number: num,
           status: "erro",
           error: err.message,
@@ -198,11 +200,14 @@ async function processarFila() {
       }
     }
 
+    // ✅ Atualiza resultadosMini
+    resultadosMini = resultadosMini.concat(resultadosDoMini);
+
     broadcast({
       type: "mini_lote_concluido",
       lote: i + 1,
       totalMiniLotes: miniLotes.length,
-      resultados: resultadosMini,
+      resultados: resultadosDoMini,
     });
 
     if (i < miniLotes.length - 1) {
@@ -221,7 +226,7 @@ async function processarFila() {
     type: "batch_done",
     lastBatchCount: numeros.length,
     nextAddInMs: proximoLoteMs,
-    results: resultadosMini,
+    results: resultadosMini, // ✅ Agora está definido
   });
 
   if (fila.length > 0) {
@@ -242,7 +247,7 @@ function adicionarAFila(groupId, numbers) {
   processarFila();
 }
 
-// Broadcast WebSocket
+// Broadcast para todos os clientes
 function broadcast(data) {
   const json = JSON.stringify(data);
   wss.clients.forEach((client) => {
@@ -300,6 +305,20 @@ app.get("/qr", (req, res) => {
         </body>
       </html>
     `);
+  }
+});
+
+app.get("/grupos", async (req, res) => {
+  if (!sock) {
+    return res.status(503).json({ error: "Não conectado ao WhatsApp." });
+  }
+  try {
+    const chats = await sock.groupFetchAllParticipating();
+    const grupos = Object.values(chats).map((g) => ({ id: g.id, nome: g.subject }));
+    res.json({ grupos });
+  } catch (err) {
+    console.error("❌ Erro ao buscar grupos:", err);
+    res.status(500).json({ error: "Erro ao carregar grupos." });
   }
 });
 
