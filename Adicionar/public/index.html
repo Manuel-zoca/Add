@@ -166,7 +166,6 @@
     let addedCount = 0;
     let countdownInterval;
 
-    // WebSocket
     const ws = new WebSocket(`ws://${window.location.host}`);
 
     ws.onmessage = (event) => {
@@ -180,9 +179,9 @@
         addedCountEl.textContent = addedCount;
         remainingCountEl.textContent = remaining;
         estimatedTimeEl.textContent = formatTime((data.nextAddInMs * remaining / data.lastBatchCount) / 1000);
-        currentBatchStatusEl.textContent = `Último lote: ${data.lastBatchCount} números adicionados.`;
+        currentBatchStatusEl.textContent = `✅ Último lote: ${data.lastBatchCount} número(s) adicionados`;
 
-        result.textContent = `✅ Lote concluído. Total adicionados hoje: ${addedCount}\n\n` +
+        result.textContent = `🟢 Lote concluído:\n` +
           data.results.map(r => `${r.number} — ${r.status}${r.error ? " — Erro: " + r.error : ""}`).join('\n');
 
         startCountdown(data.nextAddInMs);
@@ -193,7 +192,7 @@
       }
 
       if (data.type === "adding_now") {
-        currentBatchStatusEl.textContent = `Adicionando agora: ${data.numberAtual}`;
+        currentBatchStatusEl.textContent = `⏳ Adicionando agora: ${data.numberAtual}`;
       }
     };
 
@@ -229,18 +228,18 @@
         const data = await res.json();
 
         if (res.status === 429) {
-          status.textContent = `⏳ Já está adicionando um lote. Aguarde ${formatTime(data.nextAddInSeconds)} para tentar novamente.`;
+          status.textContent = `⏳ Já está adicionando um lote. Aguarde ${formatTime(data.nextAddInSeconds)}.`;
           startCountdown(data.nextAddInSeconds * 1000);
           result.textContent = JSON.stringify(data, null, 2);
         } else if (data.success) {
-          status.textContent = `✅ Números enfileirados para adição. Total: ${totalQueued}`;
+          status.textContent = `✅ Números enfileirados. Total: ${totalQueued}`;
         } else {
           status.textContent = "❌ Erro: " + (data.error || "Resposta inesperada");
           result.textContent = JSON.stringify(data, null, 2);
           submitBtn.disabled = false;
         }
       } catch (err) {
-        status.textContent = "❌ Erro ao enviar requisição: " + err.message;
+        status.textContent = "❌ Erro na requisição: " + err.message;
         submitBtn.disabled = false;
       }
     });
@@ -249,7 +248,7 @@
       clearInterval(countdownInterval);
       let remaining = Math.floor(ms / 1000);
 
-      status.textContent = `⏳ Aguarde ${formatTime(remaining)} para adicionar próximo lote.`;
+      status.textContent = `⏳ Aguarde ${formatTime(remaining)} para o próximo lote.`;
 
       countdownInterval = setInterval(() => {
         remaining--;
@@ -259,7 +258,7 @@
           submitBtn.disabled = false;
           return;
         }
-        status.textContent = `⏳ Aguarde ${formatTime(remaining)} para adicionar próximo lote.`;
+        status.textContent = `⏳ Aguarde ${formatTime(remaining)}...`;
       }, 1000);
     }
 
