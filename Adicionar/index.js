@@ -15,19 +15,20 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
 
+// ✅ Use a porta fornecida pelo Render
 const PORT = process.env.PORT || 3000;
 
-// Middleware
+// ✅ Middleware corrigido
 app.use(
   cors({
-    origin: true,
+    origin: true, // Aceita qualquer origem (ou coloque seu domínio)
     credentials: true,
   })
 );
 app.use(express.json({ limit: "10mb" }));
 app.use(express.static("public"));
 
-// Estado global
+// Estado
 let sock;
 let ultimoQRCodeBase64 = null;
 const FILA_PATH = "./fila.json";
@@ -86,7 +87,7 @@ async function connectToWhatsApp() {
     printQRInTerminal: false,
     syncFullHistory: false,
     markOnlineOnConnect: true,
-    browser: ["WhatsApp Bot", "Chrome", "3.0"],
+    browser: ["Render WhatsApp Bot", "Safari", "3.0"],
     connectTimeoutMs: 60_000,
     defaultQueryTimeoutMs: 30_000,
     emitOwnEvents: true,
@@ -101,7 +102,7 @@ async function connectToWhatsApp() {
         const qrImage = await QRCode.toDataURL(qr);
         ultimoQRCodeBase64 = qrImage;
         broadcast({ type: "qr_code", qr: qrImage });
-        console.log("📱 QR Code gerado. Escaneie no /qr");
+        console.log("📱 QR Code gerado. Acesse /qr para escanear.");
       } catch (err) {
         console.error("❌ Erro ao gerar QR Code:", err);
       }
@@ -110,7 +111,7 @@ async function connectToWhatsApp() {
     if (connection === "close") {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
       if (statusCode === DisconnectReason.loggedOut) {
-        console.log("⛔ Sessão encerrada. Limpe a pasta 'auth_info' para reautenticar.");
+        console.log("⛔ Sessão encerrada. Limpe 'auth_info' para reautenticar.");
         fs.removeSync("./auth_info");
       } else {
         console.log("🔄 Tentando reconectar...");
@@ -241,7 +242,7 @@ function adicionarAFila(groupId, numbers) {
   processarFila();
 }
 
-// Broadcast para todos os clientes WebSocket
+// Broadcast WebSocket
 function broadcast(data) {
   const json = JSON.stringify(data);
   wss.clients.forEach((client) => {
@@ -285,7 +286,7 @@ app.get("/qr", (req, res) => {
     res.send(`
       <html>
         <body style="text-align: center; font-family: sans-serif;">
-          <h3>Escaneie o QR Code</h3>
+          <h3>📱 Escaneie o QR Code</h3>
           <img src="${ultimoQRCodeBase64}" style="width: 250px; height: 250px;" />
         </body>
       </html>
@@ -299,20 +300,6 @@ app.get("/qr", (req, res) => {
         </body>
       </html>
     `);
-  }
-});
-
-app.get("/grupos", async (req, res) => {
-  if (!sock) {
-    return res.status(503).json({ error: "Não conectado ao WhatsApp." });
-  }
-  try {
-    const chats = await sock.groupFetchAllParticipating();
-    const grupos = Object.values(chats).map((g) => ({ id: g.id, nome: g.subject }));
-    res.json({ grupos });
-  } catch (err) {
-    console.error("❌ Erro ao buscar grupos:", err);
-    res.status(500).json({ error: "Erro ao carregar grupos." });
   }
 });
 
