@@ -187,7 +187,7 @@
         startCountdown(data.nextAddInMs);
         setTimeout(() => {
           submitBtn.disabled = false;
-          status.textContent = "Você pode adicionar novos números agora.";
+          status.textContent = "✅ Lote finalizado com sucesso. Já pode fechar esta janela.";
         }, data.nextAddInMs);
       }
 
@@ -201,7 +201,7 @@
 
       clearInterval(countdownInterval);
       result.textContent = "";
-      status.textContent = "⏳ Processando...";
+      status.textContent = "⏳ Enviando números ao servidor...";
       submitBtn.disabled = true;
 
       const groupId = document.getElementById('groupId').value.trim();
@@ -228,11 +228,11 @@
         const data = await res.json();
 
         if (res.status === 429) {
-          status.textContent = `⏳ Já está adicionando um lote. Aguarde ${formatTime(data.nextAddInSeconds)}.`;
+          status.textContent = `⚠️ Já há um processo em andamento. Aguarde ${formatTime(data.nextAddInSeconds)} antes de tentar novamente.`;
           startCountdown(data.nextAddInSeconds * 1000);
           result.textContent = JSON.stringify(data, null, 2);
         } else if (data.success) {
-          status.textContent = `✅ Números enfileirados. Total: ${totalQueued}`;
+          status.textContent = `✅ Números recebidos com sucesso. Aguarde enquanto são adicionados em lotes.`;
         } else {
           status.textContent = "❌ Erro: " + (data.error || "Resposta inesperada");
           result.textContent = JSON.stringify(data, null, 2);
@@ -240,6 +240,7 @@
         }
       } catch (err) {
         status.textContent = "❌ Erro na requisição: " + err.message;
+        result.textContent = "";
         submitBtn.disabled = false;
       }
     });
@@ -254,7 +255,7 @@
         remaining--;
         if (remaining <= 0) {
           clearInterval(countdownInterval);
-          status.textContent = "Você pode adicionar novos números agora.";
+          status.textContent = "✅ Pronto para novo envio.";
           submitBtn.disabled = false;
           return;
         }
