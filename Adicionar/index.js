@@ -24,20 +24,13 @@ app.use(express.static("public"));
 let sock;
 let ultimoQRCodeBase64 = null;
 
-// Arquivo para salvar fila
 const FILA_PATH = "./fila.json";
 
-// Variáveis de estado da fila
-let fila = [];
-let emAdicao = false;
-let ultimoLote = 0;
-let totalAdicionados = 0;
-
-// ---------------------------- Persistência da fila ----------------------------
+// ---------------------------- Funções para salvar e carregar fila ----------------------------
 
 async function salvarFila() {
   try {
-    await fs.writeJson(FILA_PATH, { fila, ultimoLote, totalAdicionados });
+    await fs.writeJson(FILA_PATH, fila);
   } catch (err) {
     console.error("❌ Erro ao salvar fila:", err);
   }
@@ -45,16 +38,16 @@ async function salvarFila() {
 
 async function carregarFila() {
   try {
-    const data = await fs.readJson(FILA_PATH);
-    fila = data.fila || [];
-    ultimoLote = data.ultimoLote || 0;
-    totalAdicionados = data.totalAdicionados || 0;
-    console.log(`✅ Fila carregada do arquivo. Total itens: ${fila.length}`);
+    const existe = await fs.pathExists(FILA_PATH);
+    if (existe) {
+      fila = await fs.readJson(FILA_PATH);
+      console.log(`📂 Fila carregada do arquivo. ${fila.length} itens na fila.`);
+    } else {
+      fila = [];
+    }
   } catch (err) {
-    console.log("⚠️ Nenhum arquivo de fila encontrado. Começando vazio.");
+    console.error("❌ Erro ao carregar fila:", err);
     fila = [];
-    ultimoLote = 0;
-    totalAdicionados = 0;
   }
 }
 
@@ -98,17 +91,18 @@ async function connectToWhatsApp() {
     }
   });
 
-  // Log mensagens recebidas em grupos
+  // ✅ Log de mensagens recebidas em grupos
   sock.ev.on("messages.upsert", async (msgUpdate) => {
     const messages = msgUpdate.messages;
     if (!messages || !messages[0]) return;
 
     const msg = messages[0];
     const from = msg.key.remoteJid;
-    const sender =
-      msg.key.participant || (msg.key.fromMe ? "você" : msg.pushName || "desconhecido");
+    const sender = msg.key.participant || (msg.key.fromMe ? "você" : msg.pushName || "desconhecido");
     const messageContent =
-      msg.message?.conversation || msg.message?.extendedTextMessage?.text || "[mensagem não textual]";
+      msg.message?.conversation ||
+      msg.message?.extendedTextMessage?.text ||
+      "[mensagem não textual]";
 
     const isGroup = from.endsWith("@g.us");
 
@@ -148,6 +142,11 @@ const LOTE_TAMANHO = 5;
 const INTERVALO_LOTES_MIN = [10, 12, 15];
 const INTERVALO_MINILOTE_SEG = [20, 30, 60, 90, 120, 180];
 
+let fila = [];
+let emAdicao = false;
+let ultimoLote = 0;
+let totalAdicionados = 0;
+
 // ---------------------------- Lógica principal de adição ----------------------------
 
 async function isMember(groupId, number) {
@@ -161,7 +160,7 @@ async function processarFila() {
   emAdicao = true;
 
   const lote = fila.splice(0, LOTE_TAMANHO);
-  await salvarFila();
+  await salvarFila(); // salva fila atualizada após remover lote
 
   const groupId = lote[0].groupId;
   const numeros = lote.map((x) => x.number);
@@ -228,11 +227,9 @@ async function processarFila() {
     nextAddInMs: intervaloProximoLoteMs,
     results: miniLotes.flat().map((n) => ({
       number: n,
-      status: "finalizado",
+      status: "finalizado"
     })),
   });
-
-  await salvarFila();
 
   if (fila.length > 0) {
     console.log(`🕒 Aguardando ${intervaloProximoLoteMin} min para próximo lote...`);
@@ -247,7 +244,7 @@ async function processarFila() {
 
 function adicionarAFila(groupId, numbers) {
   numbers.forEach((num) => fila.push({ groupId, number: num }));
-  salvarFila();
+  salvarFila(); // salva fila após adicionar
   processarFila();
 }
 
@@ -329,7 +326,12 @@ app.get("/grupos", async (req, res) => {
 server.listen(PORT, async () => {
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
 
+  await carregarFila(); // Carrega fila salva antes de conectar
   await connectToWhatsApp();
-  await carregarFila();
-  processarFila();
+
+  // Se tiver fila pendente, já começa a processar
+  if (fila.length > 0) {
+    console.log("♻️ Fila existente detectada, iniciando processamento...");
+    processarFila();
+  }
 });
