@@ -13,7 +13,7 @@ const {
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
 app.use(cors());
 app.use(express.json());
@@ -21,8 +21,31 @@ app.use(express.static("public"));
 
 let sock;
 let ultimoQRCodeBase64 = null;
-
 const FILA_PATH = "./fila.json";
+let fila = [];
+let emAdicao = false;
+let ultimoLote = 0;
+let totalAdicionados = 0;
+
+const LOTE_TAMANHO = 5;
+const INTERVALO_LOTES_MIN = [10, 12, 15];
+const INTERVALO_MINILOTE_SEG = [20, 30, 60, 90, 120, 180];
+
+function delay(ms) {
+  return new Promise((res) => setTimeout(res, ms));
+}
+
+function dividirEmLotes(array, tamanho) {
+  const lotes = [];
+  for (let i = 0; i < array.length; i += tamanho) {
+    lotes.push(array.slice(i, i + tamanho));
+  }
+  return lotes;
+}
+
+function aleatorio(lista) {
+  return lista[Math.floor(Math.random() * lista.length)];
+}
 
 async function salvarFila() {
   try {
@@ -45,7 +68,6 @@ async function carregarFila() {
 async function connectToWhatsApp() {
   const authFolder = "./auth_info";
   fs.ensureDirSync(authFolder);
-
   const { state, saveCreds } = await useMultiFileAuthState(authFolder);
 
   sock = makeWASocket({
@@ -82,31 +104,6 @@ async function connectToWhatsApp() {
   return sock;
 }
 
-function delay(ms) {
-  return new Promise((res) => setTimeout(res, ms));
-}
-
-function dividirEmLotes(array, tamanho) {
-  const lotes = [];
-  for (let i = 0; i < array.length; i += tamanho) {
-    lotes.push(array.slice(i, i + tamanho));
-  }
-  return lotes;
-}
-
-function aleatorio(lista) {
-  return lista[Math.floor(Math.random() * lista.length)];
-}
-
-const LOTE_TAMANHO = 5;
-const INTERVALO_LOTES_MIN = [10, 12, 15];
-const INTERVALO_MINILOTE_SEG = [20, 30, 60, 90, 120, 180];
-
-let fila = [];
-let emAdicao = false;
-let ultimoLote = 0;
-let totalAdicionados = 0;
-
 async function isMember(groupId, number) {
   const groupInfo = await sock.groupMetadata(groupId);
   return groupInfo.participants.some((p) => p.id === number + "@s.whatsapp.net");
@@ -122,10 +119,9 @@ async function processarFila() {
 
   const groupId = lote[0].groupId;
   const numeros = lote.map((x) => x.number);
+  const miniLotes = dividirEmLotes(numeros, Math.random() < 0.5 ? 2 : 3);
 
   console.log(`🚀 Iniciando lote com ${numeros.length} números para o grupo ${groupId}`);
-
-  const miniLotes = dividirEmLotes(numeros, Math.random() < 0.5 ? 2 : 3);
 
   for (let i = 0; i < miniLotes.length; i++) {
     const miniLote = miniLotes[i];
@@ -133,7 +129,6 @@ async function processarFila() {
 
     for (const num of miniLote) {
       broadcast({ type: "adding_now", numberAtual: num });
-
       try {
         const isAlready = await isMember(groupId, num);
         if (isAlready) {
@@ -239,16 +234,14 @@ app.post("/adicionar", (req, res) => {
 
 app.get("/qr", (req, res) => {
   if (ultimoQRCodeBase64) {
-    const html = `
+    res.send(`
       <html>
         <body>
           <h2>Escaneie o QR Code abaixo:</h2>
           <img src="${ultimoQRCodeBase64}" />
-          <textarea rows="10" cols="80">${ultimoQRCodeBase64}</textarea>
         </body>
       </html>
-    `;
-    res.send(html);
+    `);
   } else {
     res.send("QR Code ainda não gerado. Tente novamente em alguns segundos.");
   }
@@ -257,7 +250,7 @@ app.get("/qr", (req, res) => {
 app.get("/grupos", async (req, res) => {
   try {
     const chats = await sock.groupFetchAllParticipating();
-    const grupos = Object.values(chats).map((grupo) => ({ id: grupo.id, nome: grupo.subject }));
+    const grupos = Object.values(chats).map((g) => ({ id: g.id, nome: g.subject }));
     res.json({ grupos });
   } catch (err) {
     console.error("❌ Erro ao buscar grupos:", err);
@@ -267,10 +260,8 @@ app.get("/grupos", async (req, res) => {
 
 server.listen(PORT, async () => {
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
-
   await carregarFila();
   await connectToWhatsApp();
-
   if (fila.length > 0) {
     console.log("♻️ Fila existente detectada, iniciando processamento...");
     processarFila();
