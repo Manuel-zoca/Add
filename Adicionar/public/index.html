@@ -125,7 +125,6 @@
     let addedCount = 0;
     let countdownInterval = null;
 
-    // ✅ WebSocket seguro (WSS) para Render
     function connectWebSocket() {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const host = window.location.host;
@@ -133,7 +132,7 @@
 
       ws.onopen = () => {
         console.log("🟢 WebSocket conectado");
-        status.textContent = "WebSocket conectado. Aguarde o QR...";
+        status.textContent = "Conectado. Aguarde...";
       };
 
       ws.onclose = () => {
@@ -183,7 +182,6 @@
     }
     connectWebSocket();
 
-    // Form
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       clearInterval(countdownInterval);
