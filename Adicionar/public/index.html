@@ -4,148 +4,108 @@
   <meta charset="UTF-8" />
   <title>Adicionar ao Grupo WhatsApp</title>
   <style>
-    * {
-      box-sizing: border-box;
-    }
-
+    * { box-sizing: border-box; }
     body {
-      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      font-family: 'Segoe UI', sans-serif;
       background: linear-gradient(135deg, #667eea, #764ba2);
       color: #fff;
       margin: 0;
-      padding: 0 15px;
+      padding: 20px;
+      min-height: 100vh;
       display: flex;
       flex-direction: column;
       align-items: center;
-      min-height: 100vh;
     }
-
     h2 {
-      margin: 40px 0 20px 0;
+      margin: 30px 0 15px;
       font-weight: 700;
-      letter-spacing: 1.5px;
-      text-shadow: 0 0 8px rgba(0,0,0,0.3);
+      text-shadow: 0 0 5px rgba(0,0,0,0.3);
     }
-
     form {
       background: rgba(255,255,255,0.1);
-      padding: 30px 25px;
+      padding: 30px;
       border-radius: 12px;
       max-width: 500px;
       width: 100%;
       box-shadow: 0 4px 20px rgba(0,0,0,0.2);
       backdrop-filter: blur(10px);
     }
-
     label {
       display: block;
-      margin-bottom: 8px;
+      margin: 10px 0 5px;
       font-weight: 600;
-      font-size: 0.95rem;
-      color: #d1d1d1;
+      color: #ddd;
     }
-
     input[type="text"], textarea {
       width: 100%;
-      padding: 12px 15px;
+      padding: 12px;
       border-radius: 8px;
       border: none;
-      font-size: 1rem;
-      margin-bottom: 20px;
       background: rgba(255,255,255,0.2);
       color: #fff;
-      transition: background 0.3s ease;
+      font-size: 1rem;
     }
-
-    input[type="text"]:focus, textarea:focus {
-      background: rgba(255,255,255,0.35);
-      outline: none;
-    }
-
+    textarea { resize: vertical; }
     button {
       background: #6c63ff;
-      border: none;
-      padding: 14px 25px;
-      border-radius: 10px;
       color: white;
+      border: none;
+      padding: 14px;
+      border-radius: 8px;
       font-weight: 700;
-      font-size: 1.1rem;
       cursor: pointer;
-      transition: background 0.3s ease;
       width: 100%;
-      box-shadow: 0 6px 15px rgba(108, 99, 255, 0.5);
-      user-select: none;
+      margin-top: 20px;
+      transition: background 0.3s;
     }
-
-    button:disabled {
-      background: #999;
-      cursor: not-allowed;
-      box-shadow: none;
-    }
-
-    button:hover:not(:disabled) {
-      background: #5750d1;
-    }
-
+    button:disabled { background: #999; cursor: not-allowed; }
+    button:hover:not(:disabled) { background: #5750d1; }
     #status {
       margin-top: 15px;
+      min-height: 20px;
       font-size: 0.9rem;
-      color: #ccc;
-      min-height: 22px;
       text-align: center;
     }
-
     #liveStats {
       margin-top: 20px;
       text-align: center;
-    }
-
-    #liveStats p {
-      margin: 5px 0;
-    }
-
-    pre {
-      background: rgba(255, 255, 255, 0.15);
+      background: rgba(0,0,0,0.2);
       padding: 15px;
       border-radius: 10px;
       max-width: 500px;
       width: 100%;
-      margin-top: 30px;
-      font-size: 0.95rem;
-      color: #eee;
-      white-space: pre-wrap;
-      word-wrap: break-word;
-      box-shadow: inset 0 0 10px rgba(0,0,0,0.2);
-      max-height: 300px;
-      overflow-y: auto;
     }
-
-    @media (max-width: 600px) {
-      form, pre {
-        max-width: 100%;
-      }
+    pre {
+      background: rgba(0,0,0,0.3);
+      padding: 15px;
+      border-radius: 10px;
+      max-width: 500px;
+      width: 100%;
+      margin-top: 20px;
+      font-size: 0.9rem;
+      white-space: pre-wrap;
+      max-height: 200px;
+      overflow-y: auto;
     }
   </style>
 </head>
 <body>
-  <h2>Adicionar Números ao Grupo WhatsApp</h2>
+  <h2>Adicionar ao Grupo WhatsApp</h2>
   <form id="groupForm">
-    <label for="groupId">ID do Grupo:</label>
-    <input type="text" id="groupId" required placeholder="Ex: 120363252308434038@g.us" />
-
-    <label for="numbers">Números (separados por vírgula):</label>
-    <textarea id="numbers" rows="4" required placeholder="Ex: 258840000000, 258870000000"></textarea>
-
+    <label>ID do Grupo:</label>
+    <input type="text" id="groupId" placeholder="1234567890@g.us" required />
+    <label>Números (separados por vírgula):</label>
+    <textarea id="numbers" rows="4" placeholder="258840000000, 258870000000" required></textarea>
     <button type="submit" id="submitBtn">Enviar</button>
     <div id="status"></div>
   </form>
 
   <div id="liveStats">
-    <p>📦 Total de números na fila: <strong id="totalQueued">0</strong></p>
-    <p>✅ Já adicionados: <strong id="addedCount">0</strong></p>
+    <p>📦 Fila: <strong id="totalQueued">0</strong></p>
+    <p>✅ Adicionados: <strong id="addedCount">0</strong></p>
     <p>⌛ Restantes: <strong id="remainingCount">0</strong></p>
-    <p>⏳ Tempo estimado restante: <strong id="estimatedTime">--</strong></p>
-    <p>🚀 Em progresso: <strong id="currentBatchStatus">Aguardando início...</strong></p>
+    <p>⏱️ Próximo em: <strong id="estimatedTime">--</strong></p>
+    <p>🚀 Status: <strong id="currentBatchStatus">Desconectado</strong></p>
   </div>
 
   <pre id="result"></pre>
@@ -155,7 +115,6 @@
     const result = document.getElementById('result');
     const status = document.getElementById('status');
     const submitBtn = document.getElementById('submitBtn');
-
     const totalQueuedEl = document.getElementById('totalQueued');
     const addedCountEl = document.getElementById('addedCount');
     const remainingCountEl = document.getElementById('remainingCount');
@@ -164,51 +123,89 @@
 
     let totalQueued = 0;
     let addedCount = 0;
-    let countdownInterval;
+    let countdownInterval = null;
 
-    const ws = new WebSocket(`ws://${window.location.host}`);
+    // ✅ WebSocket seguro (WSS) para Render
+    function connectWebSocket() {
+      const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
+      const host = window.location.host;
+      const ws = new WebSocket(`${protocol}//${host}`);
 
-    ws.onmessage = (event) => {
-      const data = JSON.parse(event.data);
+      ws.onopen = () => {
+        console.log("🟢 WebSocket conectado");
+        status.textContent = "WebSocket conectado. Aguarde o QR...";
+      };
 
-      if (data.type === "batch_done") {
-        addedCount += data.lastBatchCount;
-        const remaining = totalQueued - addedCount;
+      ws.onclose = () => {
+        console.log("🔴 WebSocket desconectado. Tentando reconectar...");
+        setTimeout(connectWebSocket, 3000);
+      };
 
-        totalQueuedEl.textContent = totalQueued;
-        addedCountEl.textContent = addedCount;
-        remainingCountEl.textContent = remaining;
-        estimatedTimeEl.textContent = formatTime((data.nextAddInMs * remaining / data.lastBatchCount) / 1000);
-        currentBatchStatusEl.textContent = `✅ Último lote: ${data.lastBatchCount} número(s) adicionados`;
+      ws.onerror = (err) => {
+        console.error("🔴 Erro no WebSocket:", err);
+        status.textContent = "Erro de conexão com o servidor.";
+      };
 
-        result.textContent = `🟢 Lote concluído:\n` +
-          data.results.map(r => `${r.number} — ${r.status}${r.error ? " — Erro: " + r.error : ""}`).join('\n');
+      ws.onmessage = (event) => {
+        const data = JSON.parse(event.data);
+        console.log("📡 Recebido:", data.type);
 
-        startCountdown(data.nextAddInMs);
-        setTimeout(() => {
-          submitBtn.disabled = false;
-          status.textContent = "✅ Lote finalizado com sucesso. Já pode fechar esta janela.";
-        }, data.nextAddInMs);
-      }
+        if (data.type === "qr_code") {
+          status.textContent = "📱 Escaneie o QR em /qr";
+          currentBatchStatusEl.textContent = "Aguardando login...";
+        }
+        if (data.type === "connected") {
+          status.textContent = "✅ Conectado ao WhatsApp!";
+          currentBatchStatusEl.textContent = "Pronto para enviar.";
+        }
+        if (data.type === "adding_now") {
+          currentBatchStatusEl.textContent = `Adicionando: ${data.numberAtual}`;
+        }
+        if (data.type === "batch_done") {
+          addedCount += data.lastBatchCount;
+          const remaining = Math.max(0, totalQueued - addedCount);
+          totalQueuedEl.textContent = totalQueued;
+          addedCountEl.textContent = addedCount;
+          remainingCountEl.textContent = remaining;
+          estimatedTimeEl.textContent = formatTime(data.nextAddInMs / 1000);
+          result.textContent = "🟢 Lote finalizado\n" + 
+            data.results.map(r => `${r.number} — ${r.status}`).join('\n');
 
-      if (data.type === "adding_now") {
-        currentBatchStatusEl.textContent = `⏳ Adicionando agora: ${data.numberAtual}`;
-      }
-    };
+          startCountdown(data.nextAddInMs);
+          setTimeout(() => {
+            if (remaining === 0) {
+              status.textContent = "🎉 Todos os números foram processados!";
+              currentBatchStatusEl.textContent = "Finalizado";
+            }
+          }, data.nextAddInMs);
+        }
+      };
+    }
+    connectWebSocket();
 
+    // Form
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
-
       clearInterval(countdownInterval);
       result.textContent = "";
-      status.textContent = "⏳ Enviando números ao servidor...";
+      status.textContent = "⏳ Enviando ao servidor...";
       submitBtn.disabled = true;
 
       const groupId = document.getElementById('groupId').value.trim();
-      const numbers = document.getElementById('numbers').value
-        .split(',')
-        .map(num => num.trim())
-        .filter(Boolean);
+      const numbers = Array.from(
+        new Set(
+          document.getElementById('numbers').value
+            .split(',')
+            .map(n => n.trim())
+            .filter(n => n && /^\d+$/.test(n))
+        )
+      );
+
+      if (numbers.length === 0) {
+        status.textContent = "❌ Nenhum número válido.";
+        submitBtn.disabled = false;
+        return;
+      }
 
       totalQueued = numbers.length;
       addedCount = 0;
@@ -216,7 +213,7 @@
       addedCountEl.textContent = "0";
       remainingCountEl.textContent = totalQueued;
       estimatedTimeEl.textContent = "--";
-      currentBatchStatusEl.textContent = "Aguardando início...";
+      currentBatchStatusEl.textContent = "Processando...";
 
       try {
         const res = await fetch('/adicionar', {
@@ -228,38 +225,33 @@
         const data = await res.json();
 
         if (res.status === 429) {
-          status.textContent = `⚠️ Já há um processo em andamento. Aguarde ${formatTime(data.nextAddInSeconds)} antes de tentar novamente.`;
+          status.textContent = `⏳ Aguarde ${data.nextAddInSeconds}s...`;
           startCountdown(data.nextAddInSeconds * 1000);
-          result.textContent = JSON.stringify(data, null, 2);
-        } else if (data.success) {
-          status.textContent = `✅ Números recebidos com sucesso. Aguarde enquanto são adicionados em lotes.`;
+        } else if (res.ok) {
+          status.textContent = "✅ Processo iniciado. Aguarde os lotes.";
         } else {
-          status.textContent = "❌ Erro: " + (data.error || "Resposta inesperada");
-          result.textContent = JSON.stringify(data, null, 2);
+          status.textContent = "❌ Erro: " + (data.error || "Desconhecido");
           submitBtn.disabled = false;
         }
       } catch (err) {
-        status.textContent = "❌ Erro na requisição: " + err.message;
-        result.textContent = "";
+        status.textContent = "❌ Falha de conexão: " + err.message;
+        console.error("Erro de rede:", err);
         submitBtn.disabled = false;
       }
     });
 
     function startCountdown(ms) {
       clearInterval(countdownInterval);
-      let remaining = Math.floor(ms / 1000);
-
-      status.textContent = `⏳ Aguarde ${formatTime(remaining)} para o próximo lote.`;
-
+      let s = Math.floor(ms / 1000);
       countdownInterval = setInterval(() => {
-        remaining--;
-        if (remaining <= 0) {
+        if (s <= 0) {
           clearInterval(countdownInterval);
           status.textContent = "✅ Pronto para novo envio.";
           submitBtn.disabled = false;
-          return;
+        } else {
+          status.textContent = `⏳ Aguarde ${formatTime(s)}...`;
+          s--;
         }
-        status.textContent = `⏳ Aguarde ${formatTime(remaining)}...`;
       }, 1000);
     }
 
