@@ -10,8 +10,6 @@ const {
   DisconnectReason,
 } = require("@whiskeysockets/baileys");
 
-// ---------------------------- Configuração inicial ----------------------------
-
 const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ server });
@@ -26,8 +24,6 @@ let ultimoQRCodeBase64 = null;
 
 const FILA_PATH = "./fila.json";
 
-// ---------------------------- Funções para salvar e carregar fila ----------------------------
-
 async function salvarFila() {
   try {
     await fs.writeJson(FILA_PATH, fila);
@@ -39,19 +35,12 @@ async function salvarFila() {
 async function carregarFila() {
   try {
     const existe = await fs.pathExists(FILA_PATH);
-    if (existe) {
-      fila = await fs.readJson(FILA_PATH);
-      console.log(`📂 Fila carregada do arquivo. ${fila.length} itens na fila.`);
-    } else {
-      fila = [];
-    }
+    fila = existe ? await fs.readJson(FILA_PATH) : [];
   } catch (err) {
     console.error("❌ Erro ao carregar fila:", err);
     fila = [];
   }
 }
-
-// ---------------------------- Conexão com WhatsApp ----------------------------
 
 async function connectToWhatsApp() {
   const authFolder = "./auth_info";
@@ -84,41 +73,14 @@ async function connectToWhatsApp() {
         const qrImage = await QRCode.toDataURL(qr);
         ultimoQRCodeBase64 = qrImage;
         broadcast({ type: "qr_code", qr: qrImage });
-        console.log("📱 QR Code gerado e enviado via WebSocket.");
       } catch (err) {
         console.error("❌ Erro ao gerar QR Code:", err);
       }
     }
   });
 
-  // ✅ Log de mensagens recebidas em grupos
-  sock.ev.on("messages.upsert", async (msgUpdate) => {
-    const messages = msgUpdate.messages;
-    if (!messages || !messages[0]) return;
-
-    const msg = messages[0];
-    const from = msg.key.remoteJid;
-    const sender = msg.key.participant || (msg.key.fromMe ? "você" : msg.pushName || "desconhecido");
-    const messageContent =
-      msg.message?.conversation ||
-      msg.message?.extendedTextMessage?.text ||
-      "[mensagem não textual]";
-
-    const isGroup = from.endsWith("@g.us");
-
-    if (isGroup) {
-      console.log("📨 Mensagem recebida em grupo:");
-      console.log("➡️ Grupo ID:", from);
-      console.log("👤 Remetente:", sender);
-      console.log("💬 Mensagem:", messageContent);
-      console.log("--------------------------------------------------");
-    }
-  });
-
   return sock;
 }
-
-// ---------------------------- Utilidades ----------------------------
 
 function delay(ms) {
   return new Promise((res) => setTimeout(res, ms));
@@ -136,8 +98,6 @@ function aleatorio(lista) {
   return lista[Math.floor(Math.random() * lista.length)];
 }
 
-// ---------------------------- Configurações de lote ----------------------------
-
 const LOTE_TAMANHO = 5;
 const INTERVALO_LOTES_MIN = [10, 12, 15];
 const INTERVALO_MINILOTE_SEG = [20, 30, 60, 90, 120, 180];
@@ -146,8 +106,6 @@ let fila = [];
 let emAdicao = false;
 let ultimoLote = 0;
 let totalAdicionados = 0;
-
-// ---------------------------- Lógica principal de adição ----------------------------
 
 async function isMember(groupId, number) {
   const groupInfo = await sock.groupMetadata(groupId);
@@ -160,7 +118,7 @@ async function processarFila() {
   emAdicao = true;
 
   const lote = fila.splice(0, LOTE_TAMANHO);
-  await salvarFila(); // salva fila atualizada após remover lote
+  await salvarFila();
 
   const groupId = lote[0].groupId;
   const numeros = lote.map((x) => x.number);
@@ -190,7 +148,7 @@ async function processarFila() {
         );
 
         const status = resp?.[0]?.status;
-        if (status === 200) {
+        if (status === 200 || status === 400) {
           resultadosMini.push({ number: num, status: "adicionado com sucesso" });
           totalAdicionados++;
         } else {
@@ -225,10 +183,7 @@ async function processarFila() {
     type: "batch_done",
     lastBatchCount: numeros.length,
     nextAddInMs: intervaloProximoLoteMs,
-    results: miniLotes.flat().map((n) => ({
-      number: n,
-      status: "finalizado"
-    })),
+    results: miniLotes.flat().map((n) => ({ number: n, status: "finalizado" })),
   });
 
   if (fila.length > 0) {
@@ -244,11 +199,9 @@ async function processarFila() {
 
 function adicionarAFila(groupId, numbers) {
   numbers.forEach((num) => fila.push({ groupId, number: num }));
-  salvarFila(); // salva fila após adicionar
+  salvarFila();
   processarFila();
 }
-
-// ---------------------------- API e WebSocket ----------------------------
 
 function broadcast(data) {
   const json = JSON.stringify(data);
@@ -284,8 +237,6 @@ app.post("/adicionar", (req, res) => {
   });
 });
 
-// ---------------------------- QR Code via HTTP ----------------------------
-
 app.get("/qr", (req, res) => {
   if (ultimoQRCodeBase64) {
     const html = `
@@ -293,7 +244,6 @@ app.get("/qr", (req, res) => {
         <body>
           <h2>Escaneie o QR Code abaixo:</h2>
           <img src="${ultimoQRCodeBase64}" />
-          <p>Ou copie o base64 abaixo e cole em <a href="https://base64.guru/converter/decode/image" target="_blank">base64.guru</a></p>
           <textarea rows="10" cols="80">${ultimoQRCodeBase64}</textarea>
         </body>
       </html>
@@ -304,16 +254,10 @@ app.get("/qr", (req, res) => {
   }
 });
 
-// ---------------------------- Rota para listar grupos ----------------------------
-
 app.get("/grupos", async (req, res) => {
   try {
     const chats = await sock.groupFetchAllParticipating();
-    const grupos = Object.values(chats).map((grupo) => ({
-      id: grupo.id,
-      nome: grupo.subject,
-    }));
-
+    const grupos = Object.values(chats).map((grupo) => ({ id: grupo.id, nome: grupo.subject }));
     res.json({ grupos });
   } catch (err) {
     console.error("❌ Erro ao buscar grupos:", err);
@@ -321,15 +265,12 @@ app.get("/grupos", async (req, res) => {
   }
 });
 
-// ---------------------------- Inicialização ----------------------------
-
 server.listen(PORT, async () => {
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
 
-  await carregarFila(); // Carrega fila salva antes de conectar
+  await carregarFila();
   await connectToWhatsApp();
 
-  // Se tiver fila pendente, já começa a processar
   if (fila.length > 0) {
     console.log("♻️ Fila existente detectada, iniciando processamento...");
     processarFila();
