@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+  <meta charset="UTF-8" />
+  <title>Adicionar ao Grupo WhatsApp</title>
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+      background: linear-gradient(135deg, #667eea, #764ba2);
+      color: #fff;
+      margin: 0;
+      padding: 0 15px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+    }
+
+    h2 {
+      margin: 40px 0 20px 0;
+      font-weight: 700;
+      letter-spacing: 1.5px;
+      text-shadow: 0 0 8px rgba(0,0,0,0.3);
+    }
+
+    form {
+      background: rgba(255,255,255,0.1);
+      padding: 30px 25px;
+      border-radius: 12px;
+      max-width: 500px;
+      width: 100%;
+      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+      backdrop-filter: blur(10px);
+    }
+
+    label {
+      display: block;
+      margin-bottom: 8px;
+      font-weight: 600;
+      font-size: 0.95rem;
+      color: #d1d1d1;
+    }
+
+    input[type="text"], textarea {
+      width: 100%;
+      padding: 12px 15px;
+      border-radius: 8px;
+      border: none;
+      font-size: 1rem;
+      margin-bottom: 20px;
+      background: rgba(255,255,255,0.2);
+      color: #fff;
+      transition: background 0.3s ease;
+    }
+
+    input[type="text"]:focus, textarea:focus {
+      background: rgba(255,255,255,0.35);
+      outline: none;
+    }
+
+    button {
+      background: #6c63ff;
+      border: none;
+      padding: 14px 25px;
+      border-radius: 10px;
+      color: white;
+      font-weight: 700;
+      font-size: 1.1rem;
+      cursor: pointer;
+      transition: background 0.3s ease;
+      width: 100%;
+      box-shadow: 0 6px 15px rgba(108, 99, 255, 0.5);
+      user-select: none;
+    }
+
+    button:disabled {
+      background: #999;
+      cursor: not-allowed;
+      box-shadow: none;
+    }
+
+    button:hover:not(:disabled) {
+      background: #5750d1;
+    }
+
+    #status {
+      margin-top: 15px;
+      font-size: 0.9rem;
+      color: #ccc;
+      min-height: 22px;
+      text-align: center;
+    }
+
+    #liveStats {
+      margin-top: 20px;
+      text-align: center;
+    }
+
+    #liveStats p {
+      margin: 5px 0;
+    }
+
+    pre {
+      background: rgba(255, 255, 255, 0.15);
+      padding: 15px;
+      border-radius: 10px;
+      max-width: 500px;
+      width: 100%;
+      margin-top: 30px;
+      font-size: 0.95rem;
+      color: #eee;
+      white-space: pre-wrap;
+      word-wrap: break-word;
+      box-shadow: inset 0 0 10px rgba(0,0,0,0.2);
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    @media (max-width: 600px) {
+      form, pre {
+        max-width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <h2>Adicionar Números ao Grupo WhatsApp</h2>
+  <form id="groupForm">
+    <label for="groupId">ID do Grupo:</label>
+    <input type="text" id="groupId" required placeholder="Ex: 120363252308434038@g.us" />
+
+    <label for="numbers">Números (separados por vírgula):</label>
+    <textarea id="numbers" rows="4" required placeholder="Ex: 258840000000, 258870000000"></textarea>
+
+    <button type="submit" id="submitBtn">Enviar</button>
+    <div id="status"></div>
+  </form>
+
+  <div id="liveStats">
+    <p>📦 Total de números na fila: <strong id="totalQueued">0</strong></p>
+    <p>✅ Já adicionados: <strong id="addedCount">0</strong></p>
+    <p>⌛ Restantes: <strong id="remainingCount">0</strong></p>
+    <p>⏳ Tempo estimado restante: <strong id="estimatedTime">--</strong></p>
+    <p>🚀 Em progresso: <strong id="currentBatchStatus">Aguardando início...</strong></p>
+  </div>
+
+  <pre id="result"></pre>
+
+  <script>
+    const form = document.getElementById('groupForm');
+    const result = document.getElementById('result');
+    const status = document.getElementById('status');
+    const submitBtn = document.getElementById('submitBtn');
+
+    const totalQueuedEl = document.getElementById('totalQueued');
+    const addedCountEl = document.getElementById('addedCount');
+    const remainingCountEl = document.getElementById('remainingCount');
+    const estimatedTimeEl = document.getElementById('estimatedTime');
+    const currentBatchStatusEl = document.getElementById('currentBatchStatus');
+
+    let totalQueued = 0;
+    let addedCount = 0;
+    let countdownInterval;
+
+    // WebSocket
+    const ws = new WebSocket(`ws://${window.location.host}`);
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+
+      if (data.type === "batch_done") {
+        addedCount += data.lastBatchCount;
+        const remaining = totalQueued - addedCount;
+
+        totalQueuedEl.textContent = totalQueued;
+        addedCountEl.textContent = addedCount;
+        remainingCountEl.textContent = remaining;
+        estimatedTimeEl.textContent = formatTime((data.nextAddInMs * remaining / data.lastBatchCount) / 1000);
+        currentBatchStatusEl.textContent = `Último lote: ${data.lastBatchCount} números adicionados.`;
+
+        result.textContent = `✅ Lote concluído. Total adicionados hoje: ${addedCount}\n\n` +
+          data.results.map(r => `${r.number} — ${r.status}${r.error ? " — Erro: " + r.error : ""}`).join('\n');
+
+        startCountdown(data.nextAddInMs);
+        setTimeout(() => {
+          submitBtn.disabled = false;
+          status.textContent = "Você pode adicionar novos números agora.";
+        }, data.nextAddInMs);
+      }
+
+      if (data.type === "adding_now") {
+        currentBatchStatusEl.textContent = `Adicionando agora: ${data.numberAtual}`;
+      }
+    };
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+
+      clearInterval(countdownInterval);
+      result.textContent = "";
+      status.textContent = "⏳ Processando...";
+      submitBtn.disabled = true;
+
+      const groupId = document.getElementById('groupId').value.trim();
+      const numbers = document.getElementById('numbers').value
+        .split(',')
+        .map(num => num.trim())
+        .filter(Boolean);
+
+      totalQueued = numbers.length;
+      addedCount = 0;
+      totalQueuedEl.textContent = totalQueued;
+      addedCountEl.textContent = "0";
+      remainingCountEl.textContent = totalQueued;
+      estimatedTimeEl.textContent = "--";
+      currentBatchStatusEl.textContent = "Aguardando início...";
+
+      try {
+        const res = await fetch('/adicionar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ groupId, numbers })
+        });
+
+        const data = await res.json();
+
+        if (res.status === 429) {
+          status.textContent = `⏳ Já está adicionando um lote. Aguarde ${formatTime(data.nextAddInSeconds)} para tentar novamente.`;
+          startCountdown(data.nextAddInSeconds * 1000);
+          result.textContent = JSON.stringify(data, null, 2);
+        } else if (data.success) {
+          status.textContent = `✅ Números enfileirados para adição. Total: ${totalQueued}`;
+        } else {
+          status.textContent = "❌ Erro: " + (data.error || "Resposta inesperada");
+          result.textContent = JSON.stringify(data, null, 2);
+          submitBtn.disabled = false;
+        }
+      } catch (err) {
+        status.textContent = "❌ Erro ao enviar requisição: " + err.message;
+        submitBtn.disabled = false;
+      }
+    });
+
+    function startCountdown(ms) {
+      clearInterval(countdownInterval);
+      let remaining = Math.floor(ms / 1000);
+
+      status.textContent = `⏳ Aguarde ${formatTime(remaining)} para adicionar próximo lote.`;
+
+      countdownInterval = setInterval(() => {
+        remaining--;
+        if (remaining <= 0) {
+          clearInterval(countdownInterval);
+          status.textContent = "Você pode adicionar novos números agora.";
+          submitBtn.disabled = false;
+          return;
+        }
+        status.textContent = `⏳ Aguarde ${formatTime(remaining)} para adicionar próximo lote.`;
+      }, 1000);
+    }
+
+    function formatTime(seconds) {
+      const m = Math.floor(seconds / 60);
+      const s = seconds % 60;
+      return `${m}m ${s}s`;
+    }
+  </script>
+</body>
+</html>
