@@ -3,6 +3,7 @@ const fs = require("fs-extra");
 const cors = require("cors");
 const http = require("http");
 const WebSocket = require("ws");
+const QRCode = require("qrcode");
 const {
   default: makeWASocket,
   useMultiFileAuthState,
@@ -21,6 +22,7 @@ app.use(express.json());
 app.use(express.static("public"));
 
 let sock;
+let ultimoQRCodeBase64 = null;
 
 // ---------------------------- Conexão com WhatsApp ----------------------------
 
@@ -32,7 +34,6 @@ async function connectToWhatsApp() {
 
   sock = makeWASocket({
     auth: state,
-    printQRInTerminal: true,
     socketTimeoutMs: 150000,
   });
 
@@ -52,7 +53,14 @@ async function connectToWhatsApp() {
     }
 
     if (qr) {
-      console.log("📱 Escaneie o QR Code para autenticar.");
+      try {
+        const qrImage = await QRCode.toDataURL(qr);
+        ultimoQRCodeBase64 = qrImage;
+        broadcast({ type: "qr_code", qr: qrImage });
+        console.log("📱 QR Code gerado e enviado via WebSocket.");
+      } catch (err) {
+        console.error("❌ Erro ao gerar QR Code:", err);
+      }
     }
   });
 
@@ -164,7 +172,7 @@ async function processarFila() {
     type: "batch_done",
     lastBatchCount: numeros.length,
     nextAddInMs: intervaloProximoLoteMs,
-    results: miniLotes.flat().map((n, idx) => ({
+    results: miniLotes.flat().map((n) => ({
       number: n,
       status: "finalizado"
     })),
@@ -220,6 +228,26 @@ app.post("/adicionar", (req, res) => {
     success: true,
     message: `Números adicionados à fila. Total: ${fila.length}`,
   });
+});
+
+// ---------------------------- QR Code via HTTP ----------------------------
+
+app.get("/qr", (req, res) => {
+  if (ultimoQRCodeBase64) {
+    const html = `
+      <html>
+        <body>
+          <h2>Escaneie o QR Code abaixo:</h2>
+          <img src="${ultimoQRCodeBase64}" />
+          <p>Ou copie o base64 abaixo e cole em <a href="https://base64.guru/converter/decode/image" target="_blank">base64.guru</a></p>
+          <textarea rows="10" cols="80">${ultimoQRCodeBase64}</textarea>
+        </body>
+      </html>
+    `;
+    res.send(html);
+  } else {
+    res.send("QR Code ainda não gerado. Tente novamente em alguns segundos.");
+  }
 });
 
 // ---------------------------- Inicialização ----------------------------
