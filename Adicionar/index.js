@@ -398,10 +398,10 @@ server.listen(PORT, async () => {
   }
 });
 
-// WebSocket com identificação de sessão
+// WebSocket com rota por sessão
 wss.on("connection", (ws, req) => {
   const pathname = req.url;
-  const match = pathname.match(/\/(\w+)$/);
+  const match = pathname.match(/\/ws\/([^\/]+)/);
   const sessionId = match ? match[1] : "default";
 
   ws.sessionId = sessionId;
@@ -415,3 +415,4 @@ wss.on("connection", (ws, req) => {
     ws.send(JSON.stringify({ type: "connected", sessionId }));
   }
 });
+
