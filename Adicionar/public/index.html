@@ -2,6 +2,7 @@
 <html lang="pt">
 <head>
   <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>Adicionar ao Grupo WhatsApp</title>
   <style>
     * { box-sizing: border-box; }
@@ -21,12 +22,14 @@
       font-weight: 700;
       text-shadow: 0 0 5px rgba(0,0,0,0.3);
     }
+    .container {
+      max-width: 600px;
+      width: 100%;
+    }
     form {
       background: rgba(255,255,255,0.1);
       padding: 30px;
       border-radius: 12px;
-      max-width: 500px;
-      width: 100%;
       box-shadow: 0 4px 20px rgba(0,0,0,0.2);
       backdrop-filter: blur(10px);
     }
@@ -36,7 +39,7 @@
       font-weight: 600;
       color: #ddd;
     }
-    input[type="text"], textarea {
+    select, input[type="text"], textarea {
       width: 100%;
       padding: 12px;
       border-radius: 8px;
@@ -72,49 +75,79 @@
       background: rgba(0,0,0,0.2);
       padding: 15px;
       border-radius: 10px;
-      max-width: 500px;
       width: 100%;
     }
     pre {
       background: rgba(0,0,0,0.3);
       padding: 15px;
       border-radius: 10px;
-      max-width: 500px;
-      width: 100%;
       margin-top: 20px;
       font-size: 0.9rem;
       white-space: pre-wrap;
       max-height: 200px;
       overflow-y: auto;
     }
+    .qr-link {
+      color: #6c63ff;
+      background: white;
+      padding: 8px 12px;
+      border-radius: 8px;
+      font-size: 0.9rem;
+      margin-top: 10px;
+      text-decoration: none;
+      display: inline-block;
+    }
   </style>
 </head>
 <body>
-  <h2>Adicionar ao Grupo WhatsApp</h2>
-  <form id="groupForm">
-    <label>ID do Grupo:</label>
-    <input type="text" id="groupId" placeholder="1234567890@g.us" required />
-    <label>Números (separados por vírgula):</label>
-    <textarea id="numbers" rows="4" placeholder="258840000000, 258870000000" required></textarea>
-    <button type="submit" id="submitBtn">Enviar</button>
-    <div id="status"></div>
-  </form>
+  <div class="container">
+    <h2>Adicionar ao Grupo WhatsApp</h2>
 
-  <div id="liveStats">
-    <p>📦 Fila: <strong id="totalQueued">0</strong></p>
-    <p>✅ Adicionados: <strong id="addedCount">0</strong></p>
-    <p>⌛ Restantes: <strong id="remainingCount">0</strong></p>
-    <p>⏱️ Próximo em: <strong id="estimatedTime">--</strong></p>
-    <p>🚀 Status: <strong id="currentBatchStatus">Desconectado</strong></p>
+    <!-- Seleção de conta -->
+    <label>Selecione a Conta:</label>
+    <select id="sessionId">
+      <option value="conta1">📱 Conta 1</option>
+      <option value="conta2">📱 Conta 2</option>
+      <option value="conta3">📱 Conta 3</option>
+      <option value="marketing">📱 Marketing</option>
+      <option value="suporte">📱 Suporte</option>
+    </select>
+
+    <!-- Link para escanear QR -->
+    <div style="text-align: center; margin: 10px 0;">
+      <a href="/qr/conta1" target="_blank" id="qrLink" class="qr-link">🔗 Escanear QR da Conta 1</a>
+    </div>
+
+    <!-- Formulário -->
+    <form id="groupForm">
+      <label>ID do Grupo:</label>
+      <input type="text" id="groupId" placeholder="1234567890@g.us" required />
+      <label>Números (separados por vírgula):</label>
+      <textarea id="numbers" rows="4" placeholder="258840000000, 258870000000" required></textarea>
+      <button type="submit" id="submitBtn">Enviar</button>
+      <div id="status"></div>
+    </form>
+
+    <!-- Status em tempo real -->
+    <div id="liveStats">
+      <p>📦 Fila: <strong id="totalQueued">0</strong></p>
+      <p>✅ Adicionados: <strong id="addedCount">0</strong></p>
+      <p>⌛ Restantes: <strong id="remainingCount">0</strong></p>
+      <p>⏱️ Próximo em: <strong id="estimatedTime">--</strong></p>
+      <p>🚀 Status: <strong id="currentBatchStatus">Desconectado</strong></p>
+    </div>
+
+    <!-- Resultados -->
+    <pre id="result"></pre>
   </div>
-
-  <pre id="result"></pre>
 
   <script>
     const form = document.getElementById('groupForm');
     const result = document.getElementById('result');
     const status = document.getElementById('status');
     const submitBtn = document.getElementById('submitBtn');
+    const sessionIdSelect = document.getElementById('sessionId');
+    const qrLink = document.getElementById('qrLink');
     const totalQueuedEl = document.getElementById('totalQueued');
     const addedCountEl = document.getElementById('addedCount');
     const remainingCountEl = document.getElementById('remainingCount');
@@ -125,28 +158,39 @@
     let addedCount = 0;
     let countdownInterval = null;
 
-    function connectWebSocket() {
+    // Atualizar link do QR com base na conta selecionada
+    function updateQrLink() {
+      const selected = sessionIdSelect.value;
+      qrLink.href = `/qr/${selected}`;
+      qrLink.textContent = `🔗 Escanear QR da ${selected}`;
+    }
+    sessionIdSelect.addEventListener('change', updateQrLink);
+    updateQrLink();
+
+    // Função para conectar ao WebSocket da sessão
+    function connectWebSocket(sessionId) {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const host = window.location.host;
-      const ws = new WebSocket(`${protocol}//${host}`);
+      const ws = new WebSocket(`${protocol}//${host}/ws/${sessionId}`);
 
       ws.onopen = () => {
-        console.log("🟢 WebSocket conectado");
-        status.textContent = "Conectado. Aguarde...";
+        console.log("🟢 WebSocket conectado à sessão:", sessionId);
+        status.textContent = `✅ Conectado à conta ${sessionId}`;
       };
 
       ws.onclose = () => {
         console.log("🔴 WebSocket desconectado. Tentando reconectar...");
-        setTimeout(connectWebSocket, 3000);
+        setTimeout(() => connectWebSocket(sessionId), 3000);
       };
 
       ws.onerror = (err) => {
         console.error("🔴 Erro no WebSocket:", err);
-        status.textContent = "Erro de conexão com o servidor.";
       };
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
+        if (!data.sessionId || data.sessionId !== sessionId) return;
+
         console.log("📡 Recebido:", data.type);
 
         if (data.type === "qr_code") {
@@ -180,15 +224,32 @@
         }
       };
     }
-    connectWebSocket();
 
+    // Iniciar WebSocket com a conta selecionada
+    function reconnectWebSocket() {
+      const sessionId = sessionIdSelect.value;
+      connectWebSocket(sessionId);
+    }
+    sessionIdSelect.addEventListener('change', () => {
+      totalQueued = 0;
+      addedCount = 0;
+      totalQueuedEl.textContent = "0";
+      addedCountEl.textContent = "0";
+      remainingCountEl.textContent = "0";
+      estimatedTimeEl.textContent = "--";
+      result.textContent = "";
+      reconnectWebSocket();
+    });
+    reconnectWebSocket(); // Primeira conexão
+
+    // Enviar números
     form.addEventListener('submit', async (e) => {
       e.preventDefault();
       clearInterval(countdownInterval);
       result.textContent = "";
-      status.textContent = "⏳ Enviando ao servidor...";
       submitBtn.disabled = true;
 
+      const sessionId = sessionIdSelect.value;
       const groupId = document.getElementById('groupId').value.trim();
       const numbers = Array.from(
         new Set(
@@ -214,7 +275,7 @@
       currentBatchStatusEl.textContent = "Processando...";
 
       try {
-        const res = await fetch('/adicionar', {
+        const res = await fetch(`/adicionar/${sessionId}`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ groupId, numbers })
