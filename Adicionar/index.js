@@ -18,7 +18,7 @@ const wss = new WebSocket.Server({ noServer: true });
 const PORT = process.env.PORT || 3000;
 const AUTH_BASE_DIR = "./auth";
 
-// 🧠 Mapa global de sessões ativas
+// 🧠 Sessões ativas
 const sessions = new Map();
 
 // 🛠️ Middleware
@@ -44,13 +44,13 @@ const dividirEmLotes = (array, tamanho) => {
 
 const aleatorio = (lista) => lista[Math.floor(Math.random() * lista.length)];
 
-// 🔄 Inicializa uma nova sessão WhatsApp
+// 🔄 Criar sessão WhatsApp
 async function criarSessao(sessionId) {
   const authPath = `${AUTH_BASE_DIR}/${sessionId}`;
   await fs.ensureDir(authPath);
 
   if (sessions.has(sessionId)) {
-    console.warn(`⚠️ Sessão ${sessionId} já existe. Reutilizando...`);
+    console.log(`🔁 Reutilizando sessão existente: ${sessionId}`);
     return;
   }
 
@@ -93,6 +93,10 @@ async function criarSessao(sessionId) {
     sock.ev.on("connection.update", async (update) => {
       const { qr, connection, lastDisconnect } = update;
 
+      // Log detalhado para depurar
+      console.log("📡 [EVENTO] connection.update:", { connection, qr: !!qr });
+
+      // 🖼️ QR Code gerado
       if (qr) {
         try {
           const qrImage = await QRCode.toDataURL(qr);
@@ -105,6 +109,7 @@ async function criarSessao(sessionId) {
         }
       }
 
+      // 🔌 Conexão fechada
       if (connection === "close") {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         session.connected = false;
@@ -118,36 +123,43 @@ async function criarSessao(sessionId) {
         } else {
           console.log(`🔄 ${sessionId}: Tentando reconectar em 5s...`);
           broadcast(sessionId, { type: "disconnected", sessionId, reason: "reconnecting" });
-
           setTimeout(() => {
             if (sessions.has(sessionId)) {
-              console.log(`🔁 Reiniciando sessão ${sessionId} após falha...`);
               criarSessao(sessionId);
             }
           }, 5000);
         }
-      } else if (connection === "open") {
+      }
+
+      // ✅ Conexão aberta
+      if (connection === "open") {
         session.connected = true;
         session.qr = null;
         session.emAdicao = false;
         session.pararAdicao = false;
-        console.log(`✅ ${sessionId} conectado ao WhatsApp!`);
+
+        console.log(`✅ ${sessionId} CONECTADO AO WHATSAPP!`);
+        console.log(`👤 Usuário: ${sock.user?.id || "Desconhecido"}`);
+
         broadcast(sessionId, {
           type: "connected",
           sessionId,
+          user: sock.user,
           totalAdicionados: session.totalAdicionados,
         });
-        processarFila(sessionId);
+
+        // Inicia fila
+        setImmediate(() => processarFila(sessionId));
       }
     });
   } catch (err) {
-    console.error(`❌ Falha ao criar sessão ${sessionId}:`, err.message);
+    console.error(`❌ Falha ao criar sessão ${sessionId}:`, err);
     sessions.delete(sessionId);
-    await fs.remove(`${AUTH_BASE_DIR}/${sessionId}`).catch(() => {});
+    await fs.remove(authPath).catch(() => {});
   }
 }
 
-// 🚚 Processa a fila de adição com pausas inteligentes
+// 🚚 Processar fila de adição
 async function processarFila(sessionId) {
   const session = sessions.get(sessionId);
   if (!session || session.emAdicao || !session.sock || session.pararAdicao || session.fila.length === 0) {
@@ -236,28 +248,27 @@ async function processarFila(sessionId) {
   session.emAdicao = false;
 
   if (session.fila.length > 0 && !session.pararAdicao) {
-    setTimeout(() => {
-      processarFila(sessionId);
-    }, proximoLoteMs);
-  } else {
-    if (session.pararAdicao) {
-      broadcast(sessionId, { type: "stopped", sessionId });
-      session.pararAdicao = false;
-    }
+    setTimeout(() => processarFila(sessionId), proximoLoteMs);
+  } else if (session.pararAdicao) {
+    broadcast(sessionId, { type: "stopped", sessionId });
+    session.pararAdicao = false;
   }
 }
 
-// 📡 Envia dados via WebSocket
+// 📡 Broadcast via WebSocket
 function broadcast(sessionId, data) {
   const payload = JSON.stringify({ ...data, sessionId });
+  let count = 0;
   wss.clients.forEach((client) => {
     if (client.readyState === WebSocket.OPEN && client.sessionId === sessionId) {
       client.send(payload);
+      count++;
     }
   });
+  console.log(`📤 Broadcast (${data.type}) -> ${count} cliente(s) para ${sessionId}`);
 }
 
-// 🌐 Rota: Listar todas as sessões
+// 🌐 Rota: Listar sessões
 app.get("/sessions", (req, res) => {
   const list = [...sessions.entries()].map(([id, s]) => ({
     sessionId: id,
@@ -270,12 +281,11 @@ app.get("/sessions", (req, res) => {
   res.json(list);
 });
 
-// 📱 Rota: Exibir ou gerar QR
+// 📱 Rota: Mostrar QR ou status
 app.get("/qr/:sessionId", async (req, res) => {
   const { sessionId } = req.params;
-
   if (!sessionId || !/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
-    return res.status(400).send("ID de sessão inválido.");
+    return res.status(400).send("ID inválido.");
   }
 
   let session = sessions.get(sessionId);
@@ -310,28 +320,33 @@ app.get("/qr/:sessionId", async (req, res) => {
         <p>Gerando código para ${sessionId}...</p>
         <div id="qr"></div>
         <script>
-          const ws = new WebSocket((window.location.protocol === "https:" ? "wss:" : "ws:") + "//" + window.location.host + "/ws/${sessionId}");
-          ws.onmessage = (e) => {
-            const data = JSON.parse(e.data);
-            if (data.type === "qr_code" && data.qr) {
-              document.getElementById('qr').innerHTML = \`
-                <img src="\${data.qr}" width="250" />
-              \`;
-            }
-          };
+          function connect() {
+            const ws = new WebSocket((window.location.protocol === "https:" ? "wss:" : "ws:") + "//" + window.location.host + "/ws/${sessionId}");
+            ws.onmessage = (e) => {
+              const data = JSON.parse(e.data);
+              if (data.type === "qr_code" && data.qr) {
+                document.getElementById('qr').innerHTML = '<img src="' + data.qr + '" width="250" />';
+              } else if (data.type === "connected") {
+                document.body.innerHTML = '<h3>✅ Conectado com sucesso!</h3><a href="/">Voltar ao painel</a>';
+              }
+            };
+            ws.onclose = () => setTimeout(connect, 3000);
+            ws.onerror = () => ws.close();
+          }
+          connect();
         </script>
       </body></html>
     `);
   }
 });
 
-// 📤 Adicionar números à fila
+// 📤 Adicionar à fila
 app.post("/adicionar/:sessionId", async (req, res) => {
   const { sessionId } = req.params;
   const { groupId, numbers } = req.body;
 
   if (!sessionId || !/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
-    return res.status(400).json({ error: "ID de sessão inválido." });
+    return res.status(400).json({ error: "ID inválido." });
   }
 
   if (!groupId || !Array.isArray(numbers) || numbers.length === 0) {
@@ -339,34 +354,20 @@ app.post("/adicionar/:sessionId", async (req, res) => {
   }
 
   const session = sessions.get(sessionId);
-  if (!session) {
-    return res.status(503).json({ error: "Sessão não encontrada." });
-  }
+  if (!session) return res.status(503).json({ error: "Sessão não encontrada." });
+  if (!session.connected) return res.status(503).json({ error: "WhatsApp não conectado." });
+  if (session.emAdicao) return res.status(429).json({ error: "Adição em andamento. Use /stop." });
 
-  if (!session.connected) {
-    return res.status(503).json({ error: "WhatsApp não conectado." });
-  }
-
-  if (session.emAdicao) {
-    return res.status(429).json({
-      error: "Adição em andamento. Use /stop para interromper.",
-    });
-  }
-
-  const numerosValidos = numbers
+  const validos = numbers
     .map((n) => n.toString().replace(/\D/g, ""))
     .filter((n) => n.length >= 8 && n.length <= 15);
 
-  if (numerosValidos.length === 0) {
-    return res.status(400).json({ error: "Nenhum número válido fornecido." });
-  }
-
-  numerosValidos.forEach((num) => session.fila.push({ groupId, number: num }));
+  validos.forEach((num) => session.fila.push({ groupId, number: num }));
   processarFila(sessionId);
 
   res.json({
     success: true,
-    message: `Processo iniciado. ${numerosValidos.length} números na fila.`,
+    message: `Processo iniciado. ${validos.length} números na fila.`,
     filaTotal: session.fila.length,
     sessionId,
   });
@@ -384,7 +385,7 @@ app.post("/stop/:sessionId", (req, res) => {
   res.status(404).json({ error: "Sessão não encontrada." });
 });
 
-// 🔌 Desconectar conta
+// 🔌 Desconectar
 app.post("/disconnect/:sessionId", async (req, res) => {
   const { sessionId } = req.params;
   const session = sessions.get(sessionId);
@@ -394,7 +395,7 @@ app.post("/disconnect/:sessionId", async (req, res) => {
       await fs.remove(session.authPath);
       sessions.delete(sessionId);
       broadcast(sessionId, { type: "disconnected", sessionId, manual: true });
-      return res.json({ success: true, message: "Desconectado com sucesso." });
+      return res.json({ success: true, message: "Desconectado." });
     } catch (err) {
       console.error("Erro ao desconectar:", err);
     }
@@ -402,9 +403,21 @@ app.post("/disconnect/:sessionId", async (req, res) => {
   res.status(404).json({ error: "Sessão não encontrada." });
 });
 
-// 🌐 WebSocket upgrade e conexão
+// 🌐 WebSocket upgrade
 server.on("upgrade", (request, socket, head) => {
-  const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
+  const { url, headers } = request;
+  const protocol = headers["x-forwarded-proto"] || "http";
+  const host = headers.host;
+  const fullUrl = `${protocol}://${host}${url}`;
+
+  let pathname;
+  try {
+    pathname = new URL(fullUrl).pathname;
+  } catch (e) {
+    socket.destroy();
+    return;
+  }
+
   const match = pathname.match(/\/ws\/([^\/]+)/);
   const sessionId = match ? match[1] : null;
 
@@ -432,9 +445,7 @@ server.on("upgrade", (request, socket, head) => {
     ws.on("message", (data) => {
       try {
         const msg = JSON.parse(data);
-        if (msg.type === "ping") {
-          ws.send(JSON.stringify({ type: "pong" }));
-        }
+        if (msg.type === "ping") ws.send(JSON.stringify({ type: "pong" }));
       } catch (e) {}
     });
 
@@ -444,7 +455,7 @@ server.on("upgrade", (request, socket, head) => {
   });
 });
 
-// 🏠 Página inicial - Painel de controle
+// 🏠 Página inicial
 app.get("/", (req, res) => {
   res.send(`
     <html><head><title>🔐 Painel WhatsApp</title>
@@ -487,7 +498,7 @@ app.get("/", (req, res) => {
         function novaSessao() {
           const id = prompt("ID da nova conta:");
           if (id && /^[a-zA-Z0-9_-]+$/.test(id)) location.href = '/qr/' + encodeURIComponent(id);
-          else if (id) alert("ID inválido! Use letras, números, - ou _");
+          else if (id) alert("ID inválido!");
         }
 
         function add(id) {
@@ -506,18 +517,9 @@ app.get("/", (req, res) => {
           });
         }
 
-        function stop(id) { 
-          fetch('/stop/'+id, {method: 'POST'}).then(() => refresh()); 
-        }
-
-        function disconnect(id) { 
-          if (confirm("Desconectar " + id + "?")) {
-            fetch('/disconnect/'+id, {method: 'POST'}).then(() => refresh());
-          }
-        }
-
-        setInterval(refresh, 3000);
-        refresh();
+        function stop(id) { fetch('/stop/'+id, {method: 'POST'}); }
+        function disconnect(id) { if (confirm("Desconectar " + id + "?")) fetch('/disconnect/'+id, {method: 'POST'}); }
+        setInterval(refresh, 3000); refresh();
       </script>
     </body></html>
   `);
@@ -531,12 +533,9 @@ server.listen(PORT, async () => {
   console.log(`📦 Pasta de sessões: ${AUTH_BASE_DIR}`);
 });
 
-// 🧹 Limpeza ao encerrar
+// 🧹 Limpeza
 process.on("SIGINT", () => {
-  console.log("\n👋 Encerrando servidor...");
+  console.log("\n👋 Encerrando...");
   wss.close();
-  server.close(() => {
-    console.log("✅ Servidor encerrado.");
-    process.exit(0);
-  });
+  server.close(() => process.exit(0));
 });
