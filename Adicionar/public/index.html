@@ -105,6 +105,7 @@
       margin-left: 10px;
       cursor: pointer;
     }
+    .loading { opacity: 0.6; pointer-events: none; }
   </style>
 </head>
 <body>
@@ -170,6 +171,8 @@
     let totalQueued = 0;
     let addedCount = 0;
     let ws = null;
+    let wsReconnectInterval = null;
+    let wsPingInterval = null;
     let countdownInterval = null;
 
     // Atualizar link do QR
@@ -181,34 +184,54 @@
     sessionIdSelect.addEventListener('change', updateQrLink);
     updateQrLink();
 
-    // Conectar WebSocket com URL dinâmica (funciona no Render)
+    // Conectar WebSocket com reconexão inteligente
     function connectWebSocket(sessionId) {
       if (ws) {
         ws.close();
+        clearInterval(wsPingInterval);
       }
+      if (wsReconnectInterval) clearInterval(wsReconnectInterval);
 
-      // Usa o domínio atual (funciona em localhost e no Render)
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const host = window.location.host;
       const wsUrl = `${protocol}//${host}/ws/${sessionId}`;
-      
+
+      console.log("🔌 Tentando conectar ao WebSocket:", wsUrl);
+      status.textContent = "🔄 Conectando ao servidor...";
+
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
-        console.log("🟢 WebSocket conectado:", sessionId);
-        status.textContent = `✅ Conectado ao sistema`;
+        console.log("🟢 Conectado ao WebSocket");
+        status.textContent = "✅ Conectado ao sistema";
+        if (wsReconnectInterval) clearInterval(wsReconnectInterval);
+        wsReconnectInterval = null;
+
+        // Envia ping a cada 30s para manter vivo
+        wsPingInterval = setInterval(() => {
+          if (ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(JSON.stringify({ type: "ping" }));
+          }
+        }, 30_000);
       };
 
       ws.onclose = () => {
-        console.log("🔴 WebSocket fechado. Tentando reconectar...");
-        currentBatchStatusEl.textContent = "Desconectado";
-        status.textContent = "🔴 Desconectado do servidor";
-        setTimeout(() => connectWebSocket(sessionId), 3000);
+        console.log("🔴 WebSocket fechado");
+        clearInterval(wsPingInterval);
+        wsPingInterval = null;
+
+        if (!wsReconnectInterval) {
+          status.textContent = "🔁 Reconectando em 5s...";
+          wsReconnectInterval = setInterval(() => {
+            if (!ws || ws.readyState === WebSocket.CLOSED) {
+              connectWebSocket(sessionId);
+            }
+          }, 5000);
+        }
       };
 
       ws.onerror = (err) => {
-        console.error("🔴 Erro no WebSocket:", err);
-        status.textContent = "❌ Erro de conexão com o servidor";
+        console.error("❌ Erro no WebSocket:", err);
       };
 
       ws.onmessage = (event) => {
@@ -262,7 +285,6 @@
               estimatedTimeEl.textContent = "--";
             }
 
-            // Mostra resultados
             result.textContent = "🟢 Lote concluído\n" + 
               (data.results || []).map(r => `${r.number} → ${r.status}`).join('\n');
 
@@ -315,16 +337,13 @@
       }
     });
 
-    // Reconectar ao mudar conta
+    // Trocar de conta
     sessionIdSelect.addEventListener('change', () => {
       totalQueued = 0;
       addedCount = 0;
       updateStats();
       connectWebSocket(sessionIdSelect.value);
     });
-
-    // Primeira conexão
-    connectWebSocket(sessionIdSelect.value);
 
     // Atualizar estatísticas
     function updateStats() {
@@ -418,6 +437,9 @@
       const s = seconds % 60;
       return `${m}m ${s}s`;
     }
+
+    // Iniciar WebSocket
+    connectWebSocket(sessionIdSelect.value);
   </script>
 </body>
 </html>
