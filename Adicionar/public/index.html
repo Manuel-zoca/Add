@@ -327,7 +327,6 @@
   </div>
 
   <script>
-    // Elementos
     const sessionIdSelect = document.getElementById('sessionId');
     const qrLink = document.getElementById('qrLink');
     const stopBtn = document.getElementById('stopBtn');
@@ -338,7 +337,6 @@
     const numbersInput = document.getElementById('numbers');
     const refreshSessionsBtn = document.getElementById('refreshSessions');
 
-    // Estatísticas
     const totalQueuedEl = document.getElementById('totalQueued');
     const addedCountEl = document.getElementById('addedCount');
     const existsCountEl = document.getElementById('existsCount');
@@ -349,7 +347,6 @@
     const logEl = document.getElementById('log');
     const numberListEl = document.getElementById('numberList');
 
-    // Variáveis de estado
     let ws = null;
     let wsReconnectInterval = null;
     let wsPingInterval = null;
@@ -362,7 +359,6 @@
     let errorCount = 0;
     let numberStatusMap = {};
 
-    // Carregar sessões ativas
     async function loadSessions() {
       try {
         const res = await fetch('/sessions');
@@ -374,8 +370,7 @@
           opt.textContent = 'Nenhuma sessão ativa';
           opt.disabled = true;
           sessionIdSelect.appendChild(opt);
-          qrLink.href = '#';
-          qrLink.textContent = '🔗 Nenhuma sessão';
+          updateQrLink();
           return;
         }
 
@@ -386,6 +381,9 @@
           sessionIdSelect.appendChild(opt);
         });
 
+        if (sessions.length > 0) {
+          sessionIdSelect.value = sessions[0].sessionId;
+        }
         updateQrLink();
         connectWebSocket(sessionIdSelect.value);
       } catch (err) {
@@ -394,7 +392,6 @@
       }
     }
 
-    // Atualizar link do QR
     function updateQrLink() {
       const selected = sessionIdSelect.value;
       if (!selected || selected === 'Nenhuma sessão ativa') {
@@ -406,7 +403,6 @@
       qrLink.textContent = `🔗 Escanear QR: ${selected}`;
     }
 
-    // Conectar WebSocket
     function connectWebSocket(sessionId) {
       if (ws) {
         ws.close();
@@ -504,7 +500,7 @@
             break;
 
           case "waiting_minilote":
-            addLog(`⏳ Aguardando ${data.seconds}s para próximo mini-lote...`, "info");
+            addLog(`⏳ Aguardando 60s para próximo mini-lote...`, "info");
             break;
 
           case "batch_done":
@@ -529,7 +525,6 @@
       };
     }
 
-    // Funções auxiliares
     function addLog(text, type = "info") {
       const entry = document.createElement('div');
       entry.className = `log-entry status-${type}`;
@@ -607,7 +602,6 @@
       return `${m}m ${s}s`;
     }
 
-    // Eventos
     sessionIdSelect.addEventListener('change', () => {
       updateQrLink();
       connectWebSocket(sessionIdSelect.value);
@@ -645,9 +639,8 @@
       const sessionId = sessionIdSelect.value;
       const groupId = groupIdInput.value.trim();
 
-      // Processar números: vírgulas, espaços, quebras de linha
       const rawNumbers = numbersInput.value
-        .replace(/\s+/g, ',')  // Substitui espaços por vírgulas
+        .replace(/\s+/g, ',')
         .split(',')
         .map(n => n.trim())
         .filter(n => n && /^\d+$/.test(n));
@@ -658,7 +651,6 @@
         return;
       }
 
-      // Resetar estatísticas
       totalQueued = rawNumbers.length;
       processedCount = 0;
       addedCount = 0;
@@ -689,7 +681,6 @@
       }
     });
 
-    // Inicializar
     loadSessions();
   </script>
 </body>
