@@ -68,41 +68,32 @@ async function criarSessao(sessionId) {
   sock.ev.on("creds.update", saveCreds);
 
   // Estado da sessão
-  let connected = false;
-  let emAdicao = false;
-  let fila = [];
-  let ultimoLote = 0;
-  let totalAdicionados = 0;
-
-  const LOTE_TAMANHO = 5;
-  const INTERVALO_LOTES_MIN = [10, 12, 15];
-  const INTERVALO_MINILOTE_SEG = [20, 30, 60, 90, 120, 180];
-
-  // Armazenar antes de escutar eventos
   const session = {
     sock,
     saveCreds,
-    qr: null, // vai ser atualizado
-    connected,
-    fila,
-    emAdicao,
-    ultimoLote,
-    totalAdicionados,
+    qr: null,
+    connected: false,
+    fila: [],
+    emAdicao: false,
+    pararAdicao: false, // novo: flag para parar processamento
+    ultimoLote: 0,
+    totalAdicionados: 0,
     authPath,
-    LOTE_TAMANHO,
-    INTERVALO_LOTES_MIN,
-    INTERVALO_MINILOTE_SEG,
+    LOTE_TAMANHO: 5,
+    INTERVALO_LOTES_MIN: [10, 12, 15],
+    INTERVALO_MINILOTE_SEG: [20, 30, 60, 90, 120, 180],
   };
+
   sessions.set(sessionId, session);
 
-  // Agora escute eventos
   sock.ev.on("connection.update", async (update) => {
     const { qr, connection, lastDisconnect } = update;
 
     if (qr) {
       try {
         const qrImage = await QRCode.toDataURL(qr);
-        session.qr = qrImage; // ✅ Atualiza diretamente no objeto da sessão
+        session.qr = qrImage;
+        session.connected = false;
         broadcast(sessionId, { type: "qr_code", qr: qrImage, sessionId });
         console.log(`📱 QR Code gerado para ${sessionId}. Escaneie em /qr/${sessionId}`);
       } catch (err) {
@@ -112,21 +103,30 @@ async function criarSessao(sessionId) {
 
     if (connection === "close") {
       const statusCode = lastDisconnect?.error?.output?.statusCode;
+      session.connected = false;
+      session.sock = null;
+
       if (statusCode === DisconnectReason.loggedOut) {
-        console.log(`⛔ Sessão ${sessionId} encerrada. Limpando...`);
+        console.log(`⛔ Sessão ${sessionId} encerrada (logout). Limpando...`);
         await fs.remove(authPath);
         sessions.delete(sessionId);
+        broadcast(sessionId, { type: "disconnected", sessionId, loggedOut: true });
       } else {
         console.log(`🔄 ${sessionId}: Tentando reconectar...`);
-        setTimeout(() => criarSessao(sessionId), 3000);
+        broadcast(sessionId, { type: "disconnected", sessionId });
+        setTimeout(() => {
+          if (sessions.has(sessionId)) {
+            criarSessao(sessionId);
+          }
+        }, 3000);
       }
-      session.connected = false;
-      broadcast(sessionId, { type: "disconnected", sessionId });
     } else if (connection === "open") {
-      console.log(`✅ ${sessionId} conectado ao WhatsApp!`);
       session.connected = true;
-      session.qr = null; // limpa QR após login
-      broadcast(sessionId, { type: "connected", sessionId });
+      session.qr = null;
+      session.emAdicao = false;
+      session.pararAdicao = false;
+      console.log(`✅ ${sessionId} conectado ao WhatsApp!`);
+      broadcast(sessionId, { type: "connected", sessionId, totalAdicionados: session.totalAdicionados });
       processarFila(sessionId);
     }
   });
@@ -134,10 +134,10 @@ async function criarSessao(sessionId) {
   return sock;
 }
 
-// Processar fila (mantido igual)
+// Processar fila (com controle de parada)
 async function processarFila(sessionId) {
   const session = sessions.get(sessionId);
-  if (!session || session.emAdicao || !session.sock || session.fila.length === 0) return;
+  if (!session || session.emAdicao || !session.sock || session.fila.length === 0 || session.pararAdicao) return;
 
   session.emAdicao = true;
   const lote = session.fila.splice(0, session.LOTE_TAMANHO);
@@ -156,10 +156,14 @@ async function processarFila(sessionId) {
   let resultadosMini = [];
 
   for (let i = 0; i < miniLotes.length; i++) {
+    if (session.pararAdicao) break;
+
     const miniLote = miniLotes[i];
     const resultadosDoMini = [];
 
     for (const num of miniLote) {
+      if (session.pararAdicao) break;
+
       broadcast(sessionId, { type: "adding_now", numberAtual: num, sessionId });
 
       try {
@@ -200,32 +204,37 @@ async function processarFila(sessionId) {
       sessionId,
     });
 
-    if (i < miniLotes.length - 1) {
+    if (i < miniLotes.length - 1 && !session.pararAdicao) {
       const intervalo = aleatorio(session.INTERVALO_MINILOTE_SEG) * 1000;
       console.log(`⏳ ${sessionId}: Pausa de ${intervalo / 1000}s antes do próximo mini-lote...`);
       await delay(intervalo);
     }
   }
 
-  const proximoLoteMin = aleatorio(session.INTERVALO_LOTES_MIN);
-  const proximoLoteMs = proximoLoteMin * 60 * 1000;
-  session.ultimoLote = Date.now();
-
   broadcast(sessionId, {
     type: "batch_done",
     lastBatchCount: numeros.length,
-    nextAddInMs: proximoLoteMs,
     results: resultadosMini,
+    totalAdicionados: session.totalAdicionados,
     sessionId,
   });
 
-  if (session.fila.length > 0) {
+  session.emAdicao = false;
+
+  if (session.fila.length > 0 && !session.pararAdicao) {
+    const proximoLoteMin = aleatorio(session.INTERVALO_LOTES_MIN);
+    const proximoLoteMs = proximoLoteMin * 60 * 1000;
+    session.ultimoLote = Date.now();
+
     setTimeout(() => {
-      session.emAdicao = false;
       processarFila(sessionId);
     }, proximoLoteMs);
   } else {
     session.emAdicao = false;
+    if (session.pararAdicao) {
+      broadcast(sessionId, { type: "stopped", sessionId });
+      session.pararAdicao = false;
+    }
   }
 }
 
@@ -238,6 +247,19 @@ function broadcast(sessionId, data) {
     }
   });
 }
+
+// Rota para listar todas as sessões
+app.get("/sessions", (req, res) => {
+  const list = [...sessions.entries()].map(([id, s]) => ({
+    sessionId: id,
+    connected: s.connected,
+    qr: !!s.qr,
+    totalAdicionados: s.totalAdicionados,
+    fila: s.fila.length,
+    emAdicao: s.emAdicao,
+  }));
+  res.json(list);
+});
 
 // Rota /qr/:sessionId — MOSTRA QR OU TEXTO BASE64
 app.get("/qr/:sessionId", async (req, res) => {
@@ -254,19 +276,18 @@ app.get("/qr/:sessionId", async (req, res) => {
     session = sessions.get(sessionId);
   }
 
-  // Forçar reconexão se já conectado
   if (session.connected) {
     return res.send(`
       <html>
         <body style="text-align: center; font-family: sans-serif;">
           <h3>✅ Conectado!</h3>
           <p>Conta <strong>${sessionId}</strong> já está logada.</p>
+          <button onclick="location.href='/'">Voltar ao painel</button>
         </body>
       </html>
     `);
   }
 
-  // Mostrar QR ou Base64
   const qrCode = session.qr;
 
   if (qrCode) {
@@ -276,31 +297,33 @@ app.get("/qr/:sessionId", async (req, res) => {
           <h3>📱 Escaneie o QR Code - ${sessionId}</h3>
           <img src="${qrCode}" style="width: 250px; height: 250px;" />
           <p><small>Sessão: ${sessionId}</small></p>
+          <button onclick="copyBase64()" style="margin-top:10px;">Copiar Base64</button>
+          <script>
+            function copyBase64() {
+              navigator.clipboard.writeText('${qrCode}');
+              alert("Base64 copiado!");
+            }
+          </script>
         </body>
       </html>
     `);
   } else {
-    // Mostra mensagem + espaço para Base64 aparecer depois
     res.send(`
       <html>
         <body style="text-align: center; font-family: sans-serif;">
           <h3>⏳ Aguardando geração do QR Code...</h3>
           <p>Conecte-se ao WhatsApp escaneando o QR.</p>
           <p><strong>Conta:</strong> ${sessionId}</p>
-          <div id="qr-base64" style="margin: 20px; font-size: 0.9rem; background: #eee; color: #000; padding: 10px; border-radius: 8px; display: none;">
-            <strong>QR Base64 (copie e cole em um gerador):</strong><br/>
-            <textarea id="base64-text" rows="6" style="width:90%; font-size:0.8rem;"></textarea>
-          </div>
+          <div id="qr-container"></div>
           <script>
             const ws = new WebSocket((window.location.protocol === "https:" ? "wss:" : "ws:") + "//" + window.location.host + "/ws/${sessionId}");
             ws.onmessage = (event) => {
               const data = JSON.parse(event.data);
               if (data.type === "qr_code" && data.qr) {
-                document.body.innerHTML = \`
-                  <h3>📱 Escaneie o QR Code - ${sessionId}</h3>
+                document.getElementById('qr-container').innerHTML = \`
+                  <h3>📱 Escaneie o QR Code</h3>
                   <img src="\${data.qr}" style="width: 250px; height: 250px;" />
-                  <p><small>Sessão: ${sessionId}</small></p>
-                  <button onclick="copyBase64()" style="margin-top:10px;">Copiar Base64</button>
+                  <button onclick="copyBase64()">Copiar Base64</button>
                   <script>
                     function copyBase64() {
                       navigator.clipboard.writeText('\${data.qr}');
@@ -317,7 +340,7 @@ app.get("/qr/:sessionId", async (req, res) => {
   }
 });
 
-// Rotas POST e GET (mantidas)
+// Adicionar números
 app.post("/adicionar/:sessionId", async (req, res) => {
   const { sessionId } = req.params;
   const { groupId, numbers } = req.body;
@@ -340,23 +363,51 @@ app.post("/adicionar/:sessionId", async (req, res) => {
   }
 
   if (session.emAdicao) {
-    const tempoRestante = Math.max(0, (session.ultimoLote + 5 * 60 * 1000) - Date.now());
     return res.status(429).json({
-      error: "Adição em andamento. Aguarde.",
-      nextAddInSeconds: Math.ceil(tempoRestante / 1000),
+      error: "Já há uma adição em andamento. Use /stop para interromper.",
     });
   }
 
   numbers.forEach((num) => session.fila.push({ groupId, number: num }));
-  if (!session.emAdicao && session.connected) {
-    processarFila(sessionId);
-  }
+  processarFila(sessionId);
 
   res.json({
     success: true,
-    message: `Processo iniciado. Números na fila: ${session.fila.length}`,
+    message: `Adição iniciada. ${numbers.length} números adicionados à fila.`,
+    filaTotal: session.fila.length,
     sessionId,
   });
+});
+
+// Parar adição
+app.post("/stop/:sessionId", (req, res) => {
+  const { sessionId } = req.params;
+  const session = sessions.get(sessionId);
+  if (session) {
+    session.pararAdicao = true;
+    session.emAdicao = false;
+    broadcast(sessionId, { type: "stopped", sessionId });
+    return res.json({ success: true, message: "Adição interrompida." });
+  }
+  res.status(404).json({ error: "Sessão não encontrada." });
+});
+
+// Desconectar manualmente
+app.post("/disconnect/:sessionId", async (req, res) => {
+  const { sessionId } = req.params;
+  const session = sessions.get(sessionId);
+  if (session && session.sock) {
+    try {
+      await session.sock.logout();
+      await fs.remove(session.authPath);
+      sessions.delete(sessionId);
+      broadcast(sessionId, { type: "disconnected", sessionId, manual: true });
+      return res.json({ success: true, message: "Desconectado com sucesso." });
+    } catch (err) {
+      console.error("Erro ao desconectar:", err);
+    }
+  }
+  res.status(404).json({ error: "Sessão não encontrada." });
 });
 
 // WebSocket
@@ -368,16 +419,116 @@ wss.on("connection", (ws, req) => {
   ws.sessionId = sessionId;
   const session = sessions.get(sessionId);
 
-  if (session?.qr) {
-    ws.send(JSON.stringify({ type: "qr_code", qr: session.qr, sessionId }));
+  if (session) {
+    if (session.qr) {
+      ws.send(JSON.stringify({ type: "qr_code", qr: session.qr, sessionId }));
+    }
+    if (session.connected) {
+      ws.send(JSON.stringify({ type: "connected", sessionId, totalAdicionados: session.totalAdicionados }));
+    }
   }
-  if (session?.connected) {
-    ws.send(JSON.stringify({ type: "connected", sessionId }));
-  }
+});
+
+// Rota principal (vai receber o HTML mais tarde)
+app.get("/", (req, res) => {
+  res.send(`
+    <html>
+      <head>
+        <title>Gerenciador de Adição WhatsApp</title>
+        <style>
+          body { font-family: Arial, sans-serif; margin: 20px; }
+          .session { border: 1px solid #ccc; margin: 10px 0; padding: 10px; border-radius: 8px; }
+          .btn { margin: 5px; padding: 5px 10px; font-size: 0.9em; }
+          .connected { color: green; }
+          .disconnected { color: red; }
+          pre { background: #f4f4f4; padding: 10px; border-radius: 4px; overflow: auto; }
+        </style>
+      </head>
+      <body>
+        <h1>🔐 Gerenciador de Sessões WhatsApp</h1>
+        <button onclick="novaSessao()">+ Nova Sessão</button>
+        <div id="sessions-list"></div>
+
+        <script>
+          let sessions = [];
+
+          function refresh() {
+            fetch('/sessions').then(r => r.json()).then(list => {
+              sessions = list;
+              render();
+            });
+          }
+
+          function render() {
+            const el = document.getElementById('sessions-list');
+            el.innerHTML = sessions.map(s => \`
+              <div class="session">
+                <h3>\${s.sessionId} <span class="\${s.connected ? 'connected' : 'disconnected'}">\${s.connected ? '🟢 Conectado' : '🔴 Desconectado'}</span></h3>
+                <p>Total adicionados: \${s.totalAdicionados}</p>
+                <p>Fila: \${s.fila} números</p>
+                <p>Status: \${s.emAdicao ? '🔄 Adicionando...' : (s.connected ? '✅ Pronto' : '📲 Aguardando QR')}</p>
+                <a href="/qr/\${s.sessionId}" target="_blank"><button class="btn">QR / Conectar</button></a>
+                <button class="btn" onclick="adicionarNumeros('\${s.sessionId}')">Adicionar Números</button>
+                \${s.emAdicao ? 
+                  '<button class="btn" onclick="pararAdicao(\''+s.sessionId+'\')">⏸ Parar</button>' : 
+                  '<button class="btn" onclick="processarFila(\''+s.sessionId+'\')">▶️ Iniciar Fila</button>'
+                }
+                <button class="btn" onclick="desconectar('\${s.sessionId}')">❌ Desconectar</button>
+              </div>
+            \`).join('');
+          }
+
+          function novaSessao() {
+            const id = prompt("ID da nova sessão (ex: conta1):");
+            if (id) {
+              fetch('/qr/' + encodeURIComponent(id));
+              location.href = '/qr/' + encodeURIComponent(id);
+            }
+          }
+
+          function adicionarNumeros(id) {
+            const groupId = prompt("ID do grupo (ex: 1234567890@s.whatsapp.net):");
+            const nums = prompt("Números separados por vírgula (sem @s.whatsapp.net):");
+            if (groupId && nums) {
+              fetch('/adicionar/' + id, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  groupId,
+                  numbers: nums.split(',').map(n => n.trim()).filter(n => n)
+                })
+              }).then(r => r.json()).then(data => {
+                alert(data.message || data.error);
+                refresh();
+              });
+            }
+          }
+
+          function pararAdicao(id) {
+            fetch('/stop/' + id, { method: 'POST' })
+              .then(r => r.json())
+              .then(() => refresh());
+          }
+
+          function desconectar(id) {
+            if (confirm("Tem certeza que deseja desconectar e apagar a sessão?")) {
+              fetch('/disconnect/' + id, { method: 'POST' })
+                .then(r => r.json())
+                .then(() => refresh());
+            }
+          }
+
+          setInterval(refresh, 2000);
+          refresh();
+        </script>
+      </body>
+    </html>
+  `);
 });
 
 // Iniciar servidor
 server.listen(PORT, async () => {
   await fs.ensureDir(AUTH_BASE_DIR);
   console.log(`🚀 Servidor rodando em http://localhost:${PORT}`);
+  console.log(`👉 Acesse http://localhost:${PORT} para gerenciar as sessões.`);
 });
