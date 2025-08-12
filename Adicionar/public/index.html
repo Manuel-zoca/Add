@@ -54,6 +54,7 @@
       cursor: pointer;
       transition: all 0.3s;
       font-size: 1rem;
+      margin-top: 10px;
     }
 
     .btn-primary {
@@ -166,6 +167,7 @@
     .log-success { border-left-color: #28a745; }
     .log-error { border-left-color: #dc3545; }
     .log-info { border-left-color: #17a2b8; }
+    .log-wait { border-left-color: #17a2b8; opacity: 0.8; }
 
     .hidden {
       display: none;
@@ -211,7 +213,7 @@
         </div>
       </div>
 
-      <!-- Etapa 3: Adicionar Números -->
+      <!-- Etapa 3: Formulário -->
       <div id="formSection" class="section hidden">
         <h2>2. Adicionar Números ao Grupo</h2>
         <form id="addForm">
@@ -240,7 +242,6 @@
   </div>
 
   <script>
-    // Elementos
     const connectBtn = document.getElementById('connectBtn');
     const qrSection = document.getElementById('qrSection');
     const qrDiv = document.getElementById('qr');
@@ -258,10 +259,8 @@
     const errorCountEl = document.getElementById('errorCount');
     const logEl = document.getElementById('log');
 
-    // Estado
     let connected = false;
 
-    // Funções de UI
     function showStatus(text, type) {
       statusEl.textContent = text;
       statusEl.className = `status status-${type}`;
@@ -280,7 +279,6 @@
       errorCountEl.textContent = stats.totalFalhas || 0;
     }
 
-    // WebSocket
     function connectWebSocket() {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const host = window.location.host;
@@ -323,12 +321,19 @@
         }
 
         if (data.type === "number") {
-          const msg = `${data.number} → ${data.message}`;
-          addLog(msg, data.status === "success" ? "success" : "error");
+          addLog(`${data.number} → ${data.message}`, data.status === "success" ? "success" : "error");
         }
 
         if (data.type === "batch_start") {
           addLog(`📦 Lote iniciado: ${data.count} números`, "info");
+        }
+
+        if (data.type === "mini_batch_pause") {
+          addLog(`⏸ Pausa entre mini-lotes: aguarde ${data.seconds}s...`, "wait");
+        }
+
+        if (data.type === "next_batch_countdown") {
+          addLog(`⏳ Próximo lote em ~${data.minutes} minutos...`, "wait");
         }
 
         if (data.type === "batch_done") {
@@ -345,12 +350,11 @@
       };
     }
 
-    // Eventos
     connectBtn.addEventListener("click", async () => {
       connectBtn.disabled = true;
       try {
         await fetch("/connect", { method: "POST" });
-        addLog("📱 Solicitado QR Code...", "info");
+        addLog("📱 Gerando QR Code...", "info");
       } catch (err) {
         addLog("❌ Falha ao conectar.", "error");
         connectBtn.disabled = false;
@@ -365,8 +369,8 @@
         .split(",")
         .filter(n => n && /^\d+$/.test(n));
 
-      if (rawNumbers.length === 0) return alert("Digite números válidos");
-      if (!groupId) return alert("Digite o ID do grupo");
+      if (rawNumbers.length === 0) return alert("❌ Nenhum número válido.");
+      if (!groupId) return alert("❌ Digite o ID do grupo.");
 
       try {
         const res = await fetch("/add", {
@@ -376,7 +380,7 @@
         });
 
         if (res.ok) {
-          addLog(`✅ ${rawNumbers.length} números adicionados à fila.`, "success");
+          addLog(`✅ ${rawNumbers.length} números na fila.`, "success");
         } else {
           const data = await res.json();
           addLog(`❌ Erro: ${data.error}`, "error");
@@ -394,11 +398,10 @@
     logoutBtn.addEventListener("click", async () => {
       if (confirm("Desconectar do WhatsApp?")) {
         await fetch("/logout", { method: "POST" });
-        addLog("🔓 Desconectado com sucesso.", "error");
+        addLog("🔓 Desconectado.", "error");
       }
     });
 
-    // Iniciar
     connectWebSocket();
   </script>
 </body>
