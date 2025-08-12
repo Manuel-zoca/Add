@@ -26,6 +26,7 @@ const app = express();
 const server = http.createServer(app);
 const wss = new WebSocket.Server({ noServer: true });
 
+// 🛠️ Middleware
 app.use(
   cors({
     origin: true,
@@ -33,7 +34,7 @@ app.use(
   })
 );
 app.use(express.json({ limit: "10mb" }));
-app.use(express.static("public"));
+app.use(express.static("public")); // Arquivos estáticos (opcional)
 
 // 🧩 Funções auxiliares
 const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -48,7 +49,7 @@ const dividirEmLotes = (array, tamanho) => {
 
 const aleatorio = (lista) => lista[Math.floor(Math.random() * lista.length)];
 
-// 📡 Broadcast via WebSocket com tipo e sessionId
+// 📡 Broadcast via WebSocket
 function broadcast(sessionId, data) {
   const payload = JSON.stringify({ ...data, sessionId });
   wss.clients.forEach((client) => {
@@ -94,8 +95,8 @@ async function criarSessao(sessionId) {
       emAdicao: false,
       pararAdicao: false,
       totalAdicionados: 0,
-      totalFalhas: 0,
       totalJaExistem: 0,
+      totalFalhas: 0,
       authPath,
       LOTE_TAMANHO: 5,
       INTERVALO_LOTES_MIN: [10, 12, 15],
@@ -120,7 +121,6 @@ async function criarSessao(sessionId) {
             qr: qrImage,
             message: "Escaneie o QR para conectar.",
           });
-          console.log(`📱 QR gerado para ${sessionId}`);
         } catch (err) {
           console.error(`❌ Erro ao gerar QR:`, err.message);
           broadcast(sessionId, {
@@ -186,7 +186,7 @@ async function criarSessao(sessionId) {
   }
 }
 
-// 🚚 Processar fila com detalhes em tempo real
+// 🚚 Processar fila
 async function processarFila(sessionId) {
   const session = sessions.get(sessionId);
   if (
@@ -205,7 +205,6 @@ async function processarFila(sessionId) {
   const numeros = lote.map((item) => item.number);
   const miniLotes = dividirEmLotes(numeros, Math.random() < 0.5 ? 2 : 3);
 
-  // 📊 Início do lote
   broadcast(sessionId, {
     type: "batch_start",
     count: numeros.length,
@@ -221,7 +220,6 @@ async function processarFila(sessionId) {
     const miniLote = miniLotes[i];
     const resultadosMini = [];
 
-    // 📦 Início do mini-lote
     broadcast(sessionId, {
       type: "minilote_start",
       miniloteIndex: i + 1,
@@ -234,12 +232,7 @@ async function processarFila(sessionId) {
       if (session.pararAdicao) break;
 
       try {
-        // Buscar metadata do grupo
-        const metadata = await session.sock.groupMetadata(groupId).catch((err) => {
-          console.error(`Erro ao buscar grupo ${groupId}:`, err.message);
-          return null;
-        });
-
+        const metadata = await session.sock.groupMetadata(groupId).catch(() => null);
         if (!metadata) {
           resultadosMini.push({
             number: num,
@@ -250,19 +243,17 @@ async function processarFila(sessionId) {
           continue;
         }
 
-        // Verificar se já está no grupo
         const isAlready = metadata.participants.some((p) => p.id === `${num}@s.whatsapp.net`);
         if (isAlready) {
           resultadosMini.push({
             number: num,
             status: "ja_existe",
-            message: "Número já está no grupo.",
+            message: "Já está no grupo.",
           });
           session.totalJaExistem++;
           continue;
         }
 
-        // Tentar adicionar
         const response = await session.sock.groupParticipantsUpdate(
           groupId,
           [`${num}@s.whatsapp.net`],
@@ -281,7 +272,7 @@ async function processarFila(sessionId) {
           resultadosMini.push({
             number: num,
             status: "erro",
-            message: `Erro HTTP ${result.status}`,
+            message: `Erro ${result.status}`,
           });
           session.totalFalhas++;
         }
@@ -294,7 +285,6 @@ async function processarFila(sessionId) {
         session.totalFalhas++;
       }
 
-      // 🕒 Enviar status do número atual
       broadcast(sessionId, {
         type: "number_processed",
         number: num,
@@ -305,7 +295,6 @@ async function processarFila(sessionId) {
 
     resultadosTotais = resultadosTotais.concat(resultadosMini);
 
-    // ⏳ Intervalo entre mini-lotes
     if (i < miniLotes.length - 1 && !session.pararAdicao) {
       const intervaloSeg = aleatorio(session.INTERVALO_MINILOTE_SEG);
       broadcast(sessionId, {
@@ -317,11 +306,9 @@ async function processarFila(sessionId) {
     }
   }
 
-  // 🕒 Calcular próximo lote
   const proximoLoteMin = aleatorio(session.INTERVALO_LOTES_MIN);
   const proximoLoteMs = proximoLoteMin * 60 * 1000;
 
-  // 📊 Resultado do lote
   broadcast(sessionId, {
     type: "batch_done",
     results: resultadosTotais,
@@ -336,7 +323,6 @@ async function processarFila(sessionId) {
   session.emAdicao = false;
 
   if (session.fila.length > 0 && !session.pararAdicao) {
-    // 🕒 Aguardar próximo lote
     broadcast(sessionId, {
       type: "next_batch_scheduled",
       delayMinutes: proximoLoteMin,
@@ -355,7 +341,6 @@ async function processarFila(sessionId) {
     });
     session.pararAdicao = false;
   } else {
-    // ✅ Fila concluída
     broadcast(sessionId, {
       type: "queue_completed",
       totalAdicionados: session.totalAdicionados,
@@ -382,22 +367,17 @@ app.get("/sessions", (req, res) => {
   );
 });
 
-// 🖼️ Rota: Obter QR em Base64
-app.get("/api/qr-base64/:sessionId", (req, res) => {
-  const { sessionId } = req.params;
-  const session = sessions.get(sessionId);
-  if (session?.qr) {
-    const base64 = session.qr.replace("data:image/png;base64,", "");
-    return res.json({ base64, sessionId });
-  }
-  res.status(404).json({ error: "QR não disponível." });
-});
-
-// 📱 Página do QR
+// 📱 Página do QR: Mostra o QR em tempo real
 app.get("/qr/:sessionId", async (req, res) => {
   const { sessionId } = req.params;
+
   if (!sessionId || !/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
-    return res.status(400).send("❌ ID inválido.");
+    return res.status(400).send(`
+      <html><body style="text-align:center; font-family:Arial; color:#e74c3c;">
+        <h3>❌ ID inválido</h3>
+        <p>Use letras, números, _ ou -</p>
+      </body></html>
+    `);
   }
 
   let session = sessions.get(sessionId);
@@ -409,55 +389,66 @@ app.get("/qr/:sessionId", async (req, res) => {
 
   if (session?.connected) {
     return res.send(`
-      <html><body style="text-align:center; font-family:Arial;">
-        <h3>✅ Conectado!</h3>
-        <p><a href="/">Voltar</a></p>
+      <html><body style="text-align:center; font-family:Arial; background:#f8f9fa; padding:40px;">
+        <div style="max-width:400px; margin:0 auto; background:white; padding:30px; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,0.1);">
+          <h3 style="color:#27ae60;">✅ Conectado!</h3>
+          <p>O WhatsApp já está conectado.</p>
+          <a href="/" style="color:#3498db; text-decoration:none; font-weight:bold;">← Voltar ao painel</a>
+        </div>
       </body></html>
     `);
   }
 
   if (session?.qr) {
     return res.send(`
-      <html><body style="text-align:center; font-family:Arial;">
-        <h3>📱 Escaneie o QR</h3>
-        <img src="${session.qr}" width="250" />
-        <p><button onclick="copy()">📋 Copiar Base64</button></p>
-        <script>
-          const base64 = \`${session.qr.replace("data:image/png;base64,", "")}\`;
-          function copy() { navigator.clipboard.writeText(base64).then(() => alert("Copiado!")); }
-        </script>
+      <html><body style="text-align:center; font-family:Arial; background:#f8f9fa; padding:40px;">
+        <div style="max-width:400px; margin:0 auto; background:white; padding:30px; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,0.1);">
+          <h3>📱 Escaneie o QR</h3>
+          <img src="${session.qr}" width="250" style="border-radius:8px;" />
+          <p><button onclick="copy()" style="margin-top:15px; padding:8px 16px; background:#2980b9; color:white; border:none; border-radius:5px; cursor:pointer;">📋 Copiar Base64</button></p>
+          <script>
+            const base64 = \`${session.qr.replace("data:image/png;base64,", "")}\`;
+            function copy() { navigator.clipboard.writeText(base64).then(() => alert("Copiado!")); }
+          </script>
+          <p><a href="/" style="color:#7f8c8d; text-decoration:none;">← Voltar</a></p>
+        </div>
       </body></html>
     `);
   }
 
+  // Aguardando QR ser gerado
   res.send(`
-    <html><body style="text-align:center; font-family:Arial;">
-      <h3>⏳ Gerando QR...</h3>
-      <div id="qr"></div>
-      <script>
-        function connect() {
-          const ws = new WebSocket("wss://" + window.location.host + "/ws/${sessionId}");
-          ws.onmessage = (e) => {
-            try {
-              const data = JSON.parse(e.data);
-              if (data.type === "qr_code" && data.qr) {
-                document.getElementById("qr").innerHTML = '<img src="' + data.qr + '" width="250" /><p><button onclick="copy()">📋 Copiar Base64</button></p>';
-                window.qrBase64 = data.qr.replace("data:image/png;base64,", "");
-              } else if (data.type === "connected") {
-                document.body.innerHTML = "<h3>✅ Conectado!</h3><a href='/'>Voltar</a>";
+    <html><body style="text-align:center; font-family:Arial; background:#f8f9fa; padding:40px;">
+      <div style="max-width:400px; margin:0 auto; background:white; padding:30px; border-radius:12px; box-shadow:0 4px 12px rgba(0,0,0,0.1);">
+        <h3>⏳ Gerando QR...</h3>
+        <div id="qr"></div>
+        <p><small>Se nada acontecer, atualize a página.</small></p>
+        <p><a href="/" style="color:#7f8c8d; text-decoration:none;">← Voltar</a></p>
+        <script>
+          function connect() {
+            const ws = new WebSocket("wss://" + window.location.host + "/ws/${sessionId}");
+            ws.onmessage = (e) => {
+              try {
+                const data = JSON.parse(e.data);
+                if (data.type === "qr_code" && data.qr) {
+                  document.getElementById("qr").innerHTML = '<img src="' + data.qr + '" width="250" style="border-radius:8px;" /><p><button onclick="copy()">📋 Copiar Base64</button></p>';
+                  window.qrBase64 = data.qr.replace("data:image/png;base64,", "");
+                } else if (data.type === "connected") {
+                  document.body.innerHTML = "<h3 style='color:#27ae60;'>✅ Conectado!</h3><p>O WhatsApp foi conectado com sucesso.</p><a href='/' style='color:#3498db;'>← Voltar ao painel</a>";
+                }
+              } catch (err) {
+                console.error("Erro ao processar WebSocket:", err);
               }
-            } catch (err) {
-              console.error("Erro ao processar mensagem WebSocket:", err);
-            }
-          };
-          ws.onclose = () => setTimeout(connect, 3000);
-          ws.onerror = (err) => console.error("WebSocket error:", err);
-        }
-        function copy() {
-          if (window.qrBase64) navigator.clipboard.writeText(window.qrBase64).then(() => alert("Copiado!"));
-        }
-        connect();
-      </script>
+            };
+            ws.onclose = () => setTimeout(connect, 3000);
+            ws.onerror = (err) => console.error("WebSocket error:", err);
+          }
+          function copy() {
+            if (window.qrBase64) navigator.clipboard.writeText(window.qrBase64).then(() => alert("Copiado!"));
+          }
+          connect();
+        </script>
+      </div>
     </body></html>
   `);
 });
@@ -468,7 +459,7 @@ app.post("/adicionar/:sessionId", async (req, res) => {
   const { groupId, numbers } = req.body;
 
   if (!sessionId || !/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
-    return res.status(400).json({ error: "ID de sessão inválido." });
+    return res.status(400).json({ error: "ID inválido." });
   }
 
   if (!groupId || !Array.isArray(numbers) || numbers.length === 0) {
@@ -485,7 +476,7 @@ app.post("/adicionar/:sessionId", async (req, res) => {
     .filter((n) => n.length >= 8 && n.length <= 15);
 
   if (validos.length === 0) {
-    return res.status(400).json({ error: "Nenhum número válido fornecido." });
+    return res.status(400).json({ error: "Nenhum número válido." });
   }
 
   validos.forEach((num) => session.fila.push({ groupId, number: num }));
@@ -527,6 +518,11 @@ app.post("/disconnect/:sessionId", async (req, res) => {
     }
   }
   res.status(404).json({ error: "Sessão não encontrada." });
+});
+
+// 🏠 Página inicial
+app.get("/", (req, res) => {
+  res.sendFile(__dirname + "/index.html");
 });
 
 // 🌐 WebSocket upgrade (Render compatível)
@@ -571,11 +567,6 @@ server.on("upgrade", (request, socket, head) => {
 
     ws.on("close", () => console.log(`🔌 WebSocket fechado: ${sessionId}`));
   });
-});
-
-// 🏠 Página inicial (HTML completo abaixo)
-app.get("/", (req, res) => {
-  res.sendFile(__dirname + "/index.html"); // Vamos criar este arquivo
 });
 
 // 🚀 Iniciar servidor
