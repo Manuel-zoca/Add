@@ -13,50 +13,46 @@ const {
 
 const app = express();
 const server = http.createServer(app);
-const wss = new WebSocket.Server({ server });
+const wss = new WebSocket.Server({ noServer: true });
 
 const PORT = process.env.PORT || 3000;
-
-// 📁 Diretório de autenticação
 const AUTH_BASE_DIR = "./auth";
 
-// 🧠 Estado global: sessões ativas
+// 🧠 Mapa global de sessões ativas
 const sessions = new Map();
 
 // 🛠️ Middleware
 app.use(
   cors({
-    origin: (origin, callback) => {
-      // Permitir qualquer origem (útil no Render)
-      callback(null, true);
-    },
+    origin: (origin, callback) => callback(null, true),
     credentials: true,
   })
 );
 app.use(express.json({ limit: "10mb" }));
-app.use(express.static("public")); // Serve o frontend
+app.use(express.static("public"));
 
 // 🔧 Funções auxiliares
-function delay(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function dividirEmLotes(array, tamanho) {
+const dividirEmLotes = (array, tamanho) => {
   const lotes = [];
   for (let i = 0; i < array.length; i += tamanho) {
     lotes.push(array.slice(i, i + tamanho));
   }
   return lotes;
-}
+};
 
-function aleatorio(lista) {
-  return lista[Math.floor(Math.random() * lista.length)];
-}
+const aleatorio = (lista) => lista[Math.floor(Math.random() * lista.length)];
 
-// 🔄 Inicializar sessão
+// 🔄 Inicializa uma nova sessão WhatsApp
 async function criarSessao(sessionId) {
   const authPath = `${AUTH_BASE_DIR}/${sessionId}`;
   await fs.ensureDir(authPath);
+
+  if (sessions.has(sessionId)) {
+    console.warn(`⚠️ Sessão ${sessionId} já existe. Reutilizando...`);
+    return;
+  }
 
   try {
     const { state, saveCreds } = await useMultiFileAuthState(authPath);
@@ -68,7 +64,7 @@ async function criarSessao(sessionId) {
       printQRInTerminal: false,
       syncFullHistory: false,
       markOnlineOnConnect: true,
-      browser: [`${sessionId}`, "Chrome", "120.0"],
+      browser: [sessionId, "Chrome", "120.0"],
       connectTimeoutMs: 60_000,
       defaultQueryTimeoutMs: 30_000,
       emitOwnEvents: true,
@@ -77,7 +73,6 @@ async function criarSessao(sessionId) {
 
     sock.ev.on("creds.update", saveCreds);
 
-    // Estado da sessão
     const session = {
       sock,
       saveCreds,
@@ -95,7 +90,6 @@ async function criarSessao(sessionId) {
 
     sessions.set(sessionId, session);
 
-    // 📡 Eventos do Baileys
     sock.ev.on("connection.update", async (update) => {
       const { qr, connection, lastDisconnect } = update;
 
@@ -125,9 +119,9 @@ async function criarSessao(sessionId) {
           console.log(`🔄 ${sessionId}: Tentando reconectar em 5s...`);
           broadcast(sessionId, { type: "disconnected", sessionId, reason: "reconnecting" });
 
-          // Evita flood de reconexão
           setTimeout(() => {
             if (sessions.has(sessionId)) {
+              console.log(`🔁 Reiniciando sessão ${sessionId} após falha...`);
               criarSessao(sessionId);
             }
           }, 5000);
@@ -149,23 +143,24 @@ async function criarSessao(sessionId) {
   } catch (err) {
     console.error(`❌ Falha ao criar sessão ${sessionId}:`, err.message);
     sessions.delete(sessionId);
+    await fs.remove(`${AUTH_BASE_DIR}/${sessionId}`).catch(() => {});
   }
 }
 
-// 🚚 Processar fila com controle total
+// 🚚 Processa a fila de adição com pausas inteligentes
 async function processarFila(sessionId) {
   const session = sessions.get(sessionId);
-  if (!session || session.emAdicao || !session.sock || session.fila.length === 0 || session.pararAdicao) {
+  if (!session || session.emAdicao || !session.sock || session.pararAdicao || session.fila.length === 0) {
     return;
   }
 
   session.emAdicao = true;
   const lote = session.fila.splice(0, session.LOTE_TAMANHO);
   const groupId = lote[0].groupId;
-  const numeros = lote.map((x) => x.number);
+  const numeros = lote.map((item) => item.number);
   const miniLotes = dividirEmLotes(numeros, Math.random() < 0.5 ? 2 : 3);
 
-  console.log(`🚀 ${sessionId}: Iniciando lote com ${numeros.length} números para o grupo ${groupId}`);
+  console.log(`🚀 ${sessionId}: Iniciando lote com ${numeros.length} números no grupo ${groupId}`);
   broadcast(sessionId, {
     type: "batch_start",
     count: numeros.length,
@@ -173,13 +168,13 @@ async function processarFila(sessionId) {
     sessionId,
   });
 
-  let resultadosMini = [];
+  let resultadosTotais = [];
 
   for (let i = 0; i < miniLotes.length; i++) {
     if (session.pararAdicao) break;
 
     const miniLote = miniLotes[i];
-    const resultadosDoMini = [];
+    const resultadosMini = [];
 
     for (const num of miniLote) {
       if (session.pararAdicao) break;
@@ -189,44 +184,43 @@ async function processarFila(sessionId) {
       try {
         const metadata = await session.sock.groupMetadata(groupId).catch(() => null);
         if (!metadata) {
-          resultadosDoMini.push({ number: num, status: "erro ao buscar grupo" });
+          resultadosMini.push({ number: num, status: "erro ao buscar grupo" });
           continue;
         }
 
-        const isAlready = metadata.participants.some(p => p.id === num + "@s.whatsapp.net");
+        const isAlready = metadata.participants.some((p) => p.id === `${num}@s.whatsapp.net`);
         if (isAlready) {
-          resultadosDoMini.push({ number: num, status: "já está no grupo" });
+          resultadosMini.push({ number: num, status: "já está no grupo" });
           continue;
         }
 
         const response = await session.sock.groupParticipantsUpdate(
           groupId,
-          [num + "@s.whatsapp.net"],
+          [`${num}@s.whatsapp.net`],
           "add"
         );
 
         const result = response[0];
         if (result.status === 200) {
-          resultadosDoMini.push({ number: num, status: "adicionado com sucesso" });
+          resultadosMini.push({ number: num, status: "adicionado com sucesso" });
           session.totalAdicionados++;
         } else {
-          resultadosDoMini.push({ number: num, status: `erro ${result.status}` });
+          resultadosMini.push({ number: num, status: `erro ${result.status}` });
         }
       } catch (err) {
-        resultadosDoMini.push({ number: num, status: "erro", error: err.message });
+        resultadosMini.push({ number: num, status: "erro", error: err.message });
       }
     }
 
-    resultadosMini = resultadosMini.concat(resultadosDoMini);
+    resultadosTotais = resultadosTotais.concat(resultadosMini);
 
     if (i < miniLotes.length - 1 && !session.pararAdicao) {
-      const intervalo = aleatorio(session.INTERVALO_MINILOTE_SEG) * 1000;
-      console.log(`⏳ ${sessionId}: Pausa de ${intervalo / 1000}s antes do próximo mini-lote...`);
-      await delay(intervalo);
+      const intervaloSeg = aleatorio(session.INTERVALO_MINILOTE_SEG);
+      console.log(`⏳ ${sessionId}: Pausa de ${intervaloSeg}s antes do próximo mini-lote...`);
+      await delay(intervaloSeg * 1000);
     }
   }
 
-  // Calcular próximo lote
   const proximoLoteMin = aleatorio(session.INTERVALO_LOTES_MIN);
   const proximoLoteMs = proximoLoteMin * 60 * 1000;
 
@@ -234,7 +228,7 @@ async function processarFila(sessionId) {
     type: "batch_done",
     lastBatchCount: numeros.length,
     nextAddInMs: proximoLoteMs,
-    results: resultadosMini,
+    results: resultadosTotais,
     totalAdicionados: session.totalAdicionados,
     sessionId,
   });
@@ -253,7 +247,7 @@ async function processarFila(sessionId) {
   }
 }
 
-// 📡 Broadcast para WebSocket
+// 📡 Envia dados via WebSocket
 function broadcast(sessionId, data) {
   const payload = JSON.stringify({ ...data, sessionId });
   wss.clients.forEach((client) => {
@@ -263,7 +257,7 @@ function broadcast(sessionId, data) {
   });
 }
 
-// 🌐 Rota: Status de todas as sessões
+// 🌐 Rota: Listar todas as sessões
 app.get("/sessions", (req, res) => {
   const list = [...sessions.entries()].map(([id, s]) => ({
     sessionId: id,
@@ -276,7 +270,7 @@ app.get("/sessions", (req, res) => {
   res.json(list);
 });
 
-// 📱 Rota: Gerar ou mostrar QR
+// 📱 Rota: Exibir ou gerar QR
 app.get("/qr/:sessionId", async (req, res) => {
   const { sessionId } = req.params;
 
@@ -293,46 +287,40 @@ app.get("/qr/:sessionId", async (req, res) => {
 
   if (session?.connected) {
     return res.send(`
-      <html>
-        <body style="text-align: center; font-family: sans-serif;">
-          <h3>✅ Conectado!</h3>
-          <p>Conta <strong>${sessionId}</strong> já está logada.</p>
-          <a href="/" style="color: #007bff;">Voltar ao painel</a>
-        </body>
-      </html>
+      <html><body style="text-align:center;font-family:sans-serif;">
+        <h3>✅ Conectado!</h3>
+        <p>Conta <strong>${sessionId}</strong> já está logada.</p>
+        <a href="/" style="color:#007bff;">Voltar ao painel</a>
+      </body></html>
     `);
   }
 
   if (session?.qr) {
     res.send(`
-      <html>
-        <body style="text-align: center; font-family: sans-serif;">
-          <h3>📱 Escaneie o QR - ${sessionId}</h3>
-          <img src="${session.qr}" style="width: 250px; height: 250px;" />
-          <p><small>Sessão: ${sessionId}</small></p>
-        </body>
-      </html>
+      <html><body style="text-align:center;font-family:sans-serif;">
+        <h3>📱 Escaneie o QR - ${sessionId}</h3>
+        <img src="${session.qr}" width="250" height="250" />
+        <p><small>Sessão: ${sessionId}</small></p>
+      </body></html>
     `);
   } else {
     res.send(`
-      <html>
-        <body style="text-align: center; font-family: sans-serif;">
-          <h3>⏳ Aguardando QR...</h3>
-          <p>Gerando código para ${sessionId}...</p>
-          <div id="qr"></div>
-          <script>
-            const ws = new WebSocket((window.location.protocol === "https:" ? "wss:" : "ws:") + "//" + window.location.host + "/ws/${sessionId}");
-            ws.onmessage = (e) => {
-              const data = JSON.parse(e.data);
-              if (data.type === "qr_code" && data.qr) {
-                document.getElementById('qr').innerHTML = \`
-                  <img src="\${data.qr}" style="width: 250px;" />
-                \`;
-              }
-            };
-          </script>
-        </body>
-      </html>
+      <html><body style="text-align:center;font-family:sans-serif;">
+        <h3>⏳ Aguardando QR...</h3>
+        <p>Gerando código para ${sessionId}...</p>
+        <div id="qr"></div>
+        <script>
+          const ws = new WebSocket((window.location.protocol === "https:" ? "wss:" : "ws:") + "//" + window.location.host + "/ws/${sessionId}");
+          ws.onmessage = (e) => {
+            const data = JSON.parse(e.data);
+            if (data.type === "qr_code" && data.qr) {
+              document.getElementById('qr').innerHTML = \`
+                <img src="\${data.qr}" width="250" />
+              \`;
+            }
+          };
+        </script>
+      </body></html>
     `);
   }
 });
@@ -343,7 +331,7 @@ app.post("/adicionar/:sessionId", async (req, res) => {
   const { groupId, numbers } = req.body;
 
   if (!sessionId || !/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
-    return res.status(400).json({ error: "ID inválido." });
+    return res.status(400).json({ error: "ID de sessão inválido." });
   }
 
   if (!groupId || !Array.isArray(numbers) || numbers.length === 0) {
@@ -365,13 +353,20 @@ app.post("/adicionar/:sessionId", async (req, res) => {
     });
   }
 
-  // Adiciona à fila
-  numbers.forEach((num) => session.fila.push({ groupId, number: num }));
+  const numerosValidos = numbers
+    .map((n) => n.toString().replace(/\D/g, ""))
+    .filter((n) => n.length >= 8 && n.length <= 15);
+
+  if (numerosValidos.length === 0) {
+    return res.status(400).json({ error: "Nenhum número válido fornecido." });
+  }
+
+  numerosValidos.forEach((num) => session.fila.push({ groupId, number: num }));
   processarFila(sessionId);
 
   res.json({
     success: true,
-    message: `Processo iniciado. ${numbers.length} números na fila.`,
+    message: `Processo iniciado. ${numerosValidos.length} números na fila.`,
     filaTotal: session.fila.length,
     sessionId,
   });
@@ -383,7 +378,6 @@ app.post("/stop/:sessionId", (req, res) => {
   const session = sessions.get(sessionId);
   if (session) {
     session.pararAdicao = true;
-    session.emAdicao = false;
     broadcast(sessionId, { type: "stopped", sessionId });
     return res.json({ success: true, message: "Adição interrompida." });
   }
@@ -408,116 +402,124 @@ app.post("/disconnect/:sessionId", async (req, res) => {
   res.status(404).json({ error: "Sessão não encontrada." });
 });
 
-// 🌐 WebSocket: Conexão com controle
-wss.on("connection", (ws, req) => {
-  const pathname = req.url;
+// 🌐 WebSocket upgrade e conexão
+server.on("upgrade", (request, socket, head) => {
+  const pathname = new URL(request.url, `http://${request.headers.host}`).pathname;
   const match = pathname.match(/\/ws\/([^\/]+)/);
   const sessionId = match ? match[1] : null;
 
-  if (!sessionId) {
-    ws.close();
+  if (!sessionId || !/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
+    socket.destroy();
     return;
   }
 
-  ws.sessionId = sessionId;
-  const session = sessions.get(sessionId);
+  wss.handleUpgrade(request, socket, head, (ws) => {
+    ws.sessionId = sessionId;
+    const session = sessions.get(sessionId);
 
-  // Envia estado atual
-  if (session) {
-    if (session.qr) {
-      ws.send(JSON.stringify({ type: "qr_code", qr: session.qr, sessionId }));
-    } else if (session.connected) {
-      ws.send(JSON.stringify({
-        type: "connected",
-        sessionId,
-        totalAdicionados: session.totalAdicionados,
-      }));
-    }
-  }
-
-  // Ping de keep-alive (opcional)
-  ws.on("message", (data) => {
-    try {
-      const msg = JSON.parse(data);
-      if (msg.type === "ping") {
-        ws.send(JSON.stringify({ type: "pong" }));
+    if (session) {
+      if (session.qr) {
+        ws.send(JSON.stringify({ type: "qr_code", qr: session.qr, sessionId }));
+      } else if (session.connected) {
+        ws.send(JSON.stringify({
+          type: "connected",
+          sessionId,
+          totalAdicionados: session.totalAdicionados,
+        }));
       }
-    } catch (e) {}
-  });
+    }
 
-  ws.on("close", () => {
-    console.log(`🔌 WebSocket fechado para ${sessionId}`);
+    ws.on("message", (data) => {
+      try {
+        const msg = JSON.parse(data);
+        if (msg.type === "ping") {
+          ws.send(JSON.stringify({ type: "pong" }));
+        }
+      } catch (e) {}
+    });
+
+    ws.on("close", () => {
+      console.log(`🔌 WebSocket fechado para ${sessionId}`);
+    });
   });
 });
 
-// 🏠 Rota principal: Painel de controle
+// 🏠 Página inicial - Painel de controle
 app.get("/", (req, res) => {
   res.send(`
-    <html>
-      <head>
-        <title>🔐 Painel WhatsApp</title>
-        <style>
-          body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
-          .session { border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 8px; }
-          .btn { margin: 5px; padding: 8px 12px; border: none; border-radius: 5px; cursor: pointer; }
-          .btn-connect { background: #4CAF50; color: white; }
-          .btn-add { background: #2196F3; color: white; }
-          .btn-stop { background: #FF9800; }
-          .btn-disconnect { background: #F44336; color: white; }
-          .status { font-weight: bold; }
-          .connected { color: green; }
-          .disconnected { color: red; }
-        </style>
-      </head>
-      <body>
-        <h1>🔐 Gerenciador WhatsApp</h1>
-        <button onclick="novaSessao()">+ Nova Sessão</button>
-        <div id="sessions"></div>
+    <html><head><title>🔐 Painel WhatsApp</title>
+      <style>
+        body { font-family: Arial, sans-serif; margin: 20px; background: #f5f5f5; }
+        .session { border: 1px solid #ddd; margin: 10px 0; padding: 15px; border-radius: 8px; }
+        .btn { margin: 5px; padding: 8px 12px; border: none; border-radius: 5px; cursor: pointer; }
+        .btn-connect { background: #4CAF50; color: white; }
+        .btn-add { background: #2196F3; color: white; }
+        .btn-stop { background: #FF9800; color: white; }
+        .btn-disconnect { background: #F44336; color: white; }
+        .status { font-weight: bold; }
+        .connected { color: green; }
+        .disconnected { color: red; }
+      </style>
+    </head><body>
+      <h1>🔐 Gerenciador WhatsApp</h1>
+      <button onclick="novaSessao()">+ Nova Sessão</button>
+      <div id="sessions"></div>
 
-        <script>
-          function refresh() {
-            fetch('/sessions').then(r => r.json()).then(list => {
-              document.getElementById('sessions').innerHTML = list.map(s => \`
-                <div class="session">
-                  <h3>\${s.sessionId} <span class="status \${s.connected ? 'connected' : 'disconnected'}">\${s.connected ? '🟢 Conectado' : '🔴 Desconectado'}</span></h3>
-                  <p>Adicionados: \${s.totalAdicionados} | Fila: \${s.fila}</p>
-                  <a href="/qr/\${s.sessionId}" target="_blank"><button class="btn btn-connect">QR</button></a>
-                  <button class="btn btn-add" onclick="add('\${s.sessionId}')">Adicionar</button>
-                  \${s.emAdicao ? 
-                    '<button class="btn btn-stop" onclick="stop(\''+s.sessionId+'\')">⏸ Parar</button>' : 
-                    ''
-                  }
-                  <button class="btn btn-disconnect" onclick="disconnect('\${s.sessionId}')">❌ Desconectar</button>
-                </div>
-              `).join('');
-            });
+      <script>
+        function refresh() {
+          fetch('/sessions').then(r => r.json()).then(list => {
+            document.getElementById('sessions').innerHTML = list.map(s => \`
+              <div class="session">
+                <h3>\${s.sessionId} <span class="status \${s.connected ? 'connected' : 'disconnected'}">\${s.connected ? '🟢 Conectado' : '🔴 Desconectado'}</span></h3>
+                <p>Adicionados: \${s.totalAdicionados} | Fila: \${s.fila}</p>
+                <a href="/qr/\${s.sessionId}" target="_blank"><button class="btn btn-connect">QR</button></a>
+                <button class="btn btn-add" onclick="add('\${s.sessionId}')">Adicionar</button>
+                \${s.emAdicao ? 
+                  '<button class="btn btn-stop" onclick="stop(\''+s.sessionId+'\')">⏸ Parar</button>' : 
+                  ''
+                }
+                <button class="btn btn-disconnect" onclick="disconnect('\${s.sessionId}')">❌ Desconectar</button>
+              </div>
+            \`).join('');
+          });
+        }
+
+        function novaSessao() {
+          const id = prompt("ID da nova conta:");
+          if (id && /^[a-zA-Z0-9_-]+$/.test(id)) location.href = '/qr/' + encodeURIComponent(id);
+          else if (id) alert("ID inválido! Use letras, números, - ou _");
+        }
+
+        function add(id) {
+          const g = prompt("ID do grupo:");
+          const n = prompt("Números (separados por vírgula):");
+          if (g && n) fetch('/adicionar/'+id, {
+            method: 'POST',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+              groupId: g.trim(),
+              numbers: n.split(',').map(x => x.trim()).filter(x => x)
+            })
+          }).then(r => r.json()).then(d => {
+            if (!d.success) alert("Erro: " + d.error);
+            else alert(d.message);
+          });
+        }
+
+        function stop(id) { 
+          fetch('/stop/'+id, {method: 'POST'}).then(() => refresh()); 
+        }
+
+        function disconnect(id) { 
+          if (confirm("Desconectar " + id + "?")) {
+            fetch('/disconnect/'+id, {method: 'POST'}).then(() => refresh());
           }
+        }
 
-          function novaSessao() {
-            const id = prompt("ID da nova conta:");
-            if (id) location.href = '/qr/' + encodeURIComponent(id);
-          }
-
-          function add(id) {
-            const g = prompt("ID do grupo:");
-            const n = prompt("Números (vírgula):");
-            if (g && n) fetch('/adicionar/'+id, {
-              method: 'POST',
-              headers: {'Content-Type': 'application/json'},
-              body: JSON.stringify({groupId: g, numbers: n.split(',').map(x=>x.trim())})
-            });
-          }
-
-          function stop(id) { fetch('/stop/'+id, {method: 'POST'}); }
-          function disconnect(id) { 
-            if (confirm("Desconectar?")) fetch('/disconnect/'+id, {method: 'POST'}); 
-          }
-
-          setInterval(refresh, 3000);
-          refresh();
-        </script>
-      </body>
-    </html>
+        setInterval(refresh, 3000);
+        refresh();
+      </script>
+    </body></html>
   `);
 });
 
@@ -533,6 +535,8 @@ server.listen(PORT, async () => {
 process.on("SIGINT", () => {
   console.log("\n👋 Encerrando servidor...");
   wss.close();
-  server.close();
-  process.exit(0);
+  server.close(() => {
+    console.log("✅ Servidor encerrado.");
+    process.exit(0);
+  });
 });
