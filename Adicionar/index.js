@@ -72,7 +72,6 @@ async function criarSessao(sessionId) {
       connectTimeoutMs: 60_000,
       defaultQueryTimeoutMs: 30_000,
       emitOwnEvents: true,
-      // ⚠️ Evita reconexão automática infinita
       retryRequestDelayMs: 3000,
     });
 
@@ -451,7 +450,7 @@ wss.on("connection", (ws, req) => {
   });
 });
 
-// 🏠 Rota principal: Painel de controle (será substituído pelo HTML real)
+// 🏠 Rota principal: Painel de controle
 app.get("/", (req, res) => {
   res.send(`
     <html>
