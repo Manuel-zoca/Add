@@ -1,190 +1,405 @@
 <!DOCTYPE html>
-<html lang="pt">
+<html lang="pt-BR">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>Adicionar ao Grupo WhatsApp</title>
+  <title>🔐 Adicionar ao Grupo WhatsApp</title>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
-    * { box-sizing: border-box; }
-    body {
-      font-family: 'Segoe UI', sans-serif;
-      background: linear-gradient(135deg, #667eea, #764ba2);
-      color: #fff;
+    * {
       margin: 0;
-      padding: 20px;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      font-family: 'Inter', sans-serif;
+      background: linear-gradient(135deg, #5965e0, #7a57c5);
+      color: #fff;
       min-height: 100vh;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
+      padding: 20px;
     }
-    h2 {
-      margin: 30px 0 15px;
-      font-weight: 700;
-      text-shadow: 0 0 5px rgba(0,0,0,0.3);
-    }
+
     .container {
-      max-width: 600px;
+      max-width: 900px;
       width: 100%;
+      margin: 0 auto;
     }
-    form {
+
+    header {
+      text-align: center;
+      margin-bottom: 30px;
+    }
+
+    h1 {
+      font-size: 1.8rem;
+      font-weight: 700;
+      text-shadow: 0 2px 4px rgba(0,0,0,0.2);
+    }
+
+    .session-controls {
       background: rgba(255,255,255,0.1);
-      padding: 30px;
-      border-radius: 12px;
-      box-shadow: 0 4px 20px rgba(0,0,0,0.2);
+      padding: 20px;
+      border-radius: 16px;
       backdrop-filter: blur(10px);
+      box-shadow: 0 8px 32px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
     }
-    label {
-      display: block;
-      margin: 10px 0 5px;
-      font-weight: 600;
-      color: #ddd;
+
+    .session-row {
+      display: flex;
+      align-items: center;
+      gap: 15px;
+      flex-wrap: wrap;
     }
+
     select, input[type="text"], textarea {
-      width: 100%;
       padding: 12px;
       border-radius: 8px;
       border: none;
       background: rgba(255,255,255,0.2);
       color: #fff;
       font-size: 1rem;
+      width: 100%;
     }
-    textarea { resize: vertical; }
-    button {
+
+    select {
+      flex: 1;
+      min-width: 200px;
+    }
+
+    textarea {
+      resize: vertical;
+      height: 100px;
+    }
+
+    .btn {
+      padding: 12px 20px;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: all 0.3s ease;
+    }
+
+    .btn-primary {
       background: #6c63ff;
       color: white;
-      border: none;
-      padding: 14px;
-      border-radius: 8px;
-      font-weight: 700;
-      cursor: pointer;
-      width: 100%;
-      margin-top: 20px;
-      transition: background 0.3s;
+      flex: 1;
     }
-    button:disabled { background: #999; cursor: not-allowed; }
-    button:hover:not(:disabled) { background: #5750d1; }
-    #status {
-      margin-top: 15px;
-      min-height: 20px;
-      font-size: 0.9rem;
-      text-align: center;
+
+    .btn-stop {
+      background: #ff9800;
+      color: white;
     }
-    #liveStats {
-      margin-top: 20px;
-      text-align: center;
-      background: rgba(0,0,0,0.2);
-      padding: 15px;
-      border-radius: 10px;
-      width: 100%;
+
+    .btn-disconnect {
+      background: #f44336;
+      color: white;
     }
-    pre {
-      background: rgba(0,0,0,0.3);
-      padding: 15px;
-      border-radius: 10px;
-      margin-top: 20px;
-      font-size: 0.9rem;
-      white-space: pre-wrap;
-      max-height: 200px;
-      overflow-y: auto;
+
+    .btn:hover:not(:disabled) {
+      opacity: 0.9;
+      transform: translateY(-1px);
     }
-    .qr-link, .ctrl-btn {
+
+    .btn:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
+    .links {
+      display: flex;
+      gap: 10px;
+      margin-top: 10px;
+      justify-content: center;
+      flex-wrap: wrap;
+    }
+
+    .qr-link {
       color: #6c63ff;
       background: white;
-      padding: 8px 12px;
+      padding: 8px 16px;
       border-radius: 8px;
       font-size: 0.9rem;
-      margin-top: 10px;
       text-decoration: none;
-      display: inline-block;
+      font-weight: 600;
     }
-    .ctrl-btn {
-      background: #ff6b6b;
-      color: white;
-      border: none;
+
+    .stats-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 15px;
+      margin: 20px 0;
+    }
+
+    .stat-card {
+      background: rgba(255,255,255,0.15);
+      padding: 16px;
+      border-radius: 12px;
+      text-align: center;
+      backdrop-filter: blur(5px);
+    }
+
+    .stat-card strong {
+      font-size: 1.4rem;
+      display: block;
+      margin-bottom: 4px;
+    }
+
+    .stat-card small {
+      opacity: 0.9;
+      font-size: 0.9rem;
+    }
+
+    .progress-container {
+      margin: 15px 0;
+      background: rgba(0,0,0,0.2);
+      border-radius: 10px;
+      padding: 8px;
+    }
+
+    .progress-bar {
+      height: 10px;
+      background: #4caf50;
+      border-radius: 5px;
+      width: 0%;
+      transition: width 0.4s ease;
+    }
+
+    .realtime-log {
+      background: rgba(0,0,0,0.2);
+      border-radius: 12px;
+      padding: 16px;
+      margin-top: 20px;
+      max-height: 300px;
+      overflow-y: auto;
+      font-size: 0.9rem;
+      line-height: 1.5;
+    }
+
+    .log-entry {
+      margin: 8px 0;
       padding: 6px 10px;
-      margin-left: 10px;
-      cursor: pointer;
+      background: rgba(255,255,255,0.1);
+      border-radius: 6px;
+      word-break: break-word;
     }
-    .loading { opacity: 0.6; pointer-events: none; }
+
+    .log-number {
+      font-weight: 600;
+      color: #a0d8ff;
+    }
+
+    .status-success { color: #8bc34a; }
+    .status-error { color: #ff7066; }
+    .status-exists { color: #ffca28; }
+    .status-info { color: #80d8ff; }
+
+    .number-list {
+      margin-top: 20px;
+      background: rgba(0,0,0,0.2);
+      border-radius: 12px;
+      padding: 16px;
+      max-height: 300px;
+      overflow-y: auto;
+    }
+
+    .number-item {
+      display: flex;
+      justify-content: space-between;
+      padding: 8px;
+      border-bottom: 1px solid rgba(255,255,255,0.1);
+      font-size: 0.95rem;
+    }
+
+    .number-item:last-child {
+      border-bottom: none;
+    }
+
+    .number-status {
+      font-weight: 600;
+      font-size: 0.9rem;
+    }
+
+    .status-badge {
+      padding: 4px 8px;
+      border-radius: 12px;
+      font-size: 0.8rem;
+      font-weight: 600;
+    }
+
+    .badge-success { background: #4caf50; color: white; }
+    .badge-error { background: #f44336; color: white; }
+    .badge-exists { background: #ff9800; color: white; }
+    .badge-pending { background: #607d8b; color: white; }
+
+    .empty-state {
+      text-align: center;
+      padding: 20px;
+      color: #aaa;
+      font-style: italic;
+    }
+
+    @media (max-width: 768px) {
+      .session-row { flex-direction: column; }
+      .btn { width: 100%; }
+    }
   </style>
 </head>
 <body>
   <div class="container">
-    <h2>Adicionar ao Grupo WhatsApp</h2>
+    <header>
+      <h1>🔐 Adicionar ao Grupo WhatsApp</h1>
+    </header>
 
-    <!-- Seleção de conta -->
-    <label>Selecione a Conta:</label>
-    <select id="sessionId">
-      <option value="conta1">📱 Conta 1</option>
-      <option value="conta2">📱 Conta 2</option>
-      <option value="conta3">📱 Conta 3</option>
-      <option value="marketing">📱 Marketing</option>
-      <option value="suporte">📱 Suporte</option>
-    </select>
+    <div class="session-controls">
+      <div class="session-row">
+        <select id="sessionId" required></select>
+        <button id="refreshSessions" class="btn btn-primary" style="width: auto;">🔄 Atualizar</button>
+      </div>
 
-    <!-- Link QR + Botões de controle -->
-    <div style="text-align: center; margin: 10px 0;">
-      <a href="/qr/conta1" target="_blank" id="qrLink" class="qr-link">🔗 Escanear QR da Conta 1</a>
-      <button id="stopBtn" class="ctrl-btn" style="display: none;">⏸ Parar Envios</button>
-      <button id="disconnectBtn" class="ctrl-btn" style="display: none;">❌ Desconectar</button>
+      <div class="links">
+        <a href="#" id="qrLink" target="_blank" class="qr-link">🔗 Escanear QR</a>
+        <button id="stopBtn" class="btn btn-stop">⏸ Parar Envios</button>
+        <button id="disconnectBtn" class="btn btn-disconnect">❌ Desconectar</button>
+      </div>
     </div>
 
-    <!-- Formulário -->
     <form id="groupForm">
       <label>ID do Grupo:</label>
       <input type="text" id="groupId" placeholder="1234567890@g.us" required />
-      <label>Números (separados por vírgula):</label>
-      <textarea id="numbers" rows="4" placeholder="258840000000, 258870000000" required></textarea>
-      <button type="submit" id="submitBtn">Enviar</button>
-      <div id="status"></div>
+
+      <label>Números (um por linha ou separados por vírgula):</label>
+      <textarea id="numbers" placeholder="258840000000&#10;258870000000" required></textarea>
+
+      <button type="submit" id="submitBtn" class="btn btn-primary">🚀 Enviar para Fila</button>
     </form>
 
-    <!-- Status em tempo real -->
-    <div id="liveStats">
-      <p>📦 Fila Total: <strong id="totalQueued">0</strong></p>
-      <p>✅ Adicionados: <strong id="addedCount">0</strong></p>
-      <p>⏳ Restantes: <strong id="remainingCount">0</strong></p>
-      <p>⏱️ Próximo Lote em: <strong id="estimatedTime">--</strong></p>
-      <p>🚀 Status Atual: <strong id="currentBatchStatus">Desconectado</strong></p>
+    <!-- Estatísticas -->
+    <div class="stats-grid">
+      <div class="stat-card">
+        <strong id="totalQueued">0</strong>
+        <small>Fila Total</small>
+      </div>
+      <div class="stat-card">
+        <strong id="addedCount">0</strong>
+        <small>✅ Adicionados</small>
+      </div>
+      <div class="stat-card">
+        <strong id="existsCount">0</strong>
+        <small>🔁 Já no Grupo</small>
+      </div>
+      <div class="stat-card">
+        <strong id="errorCount">0</strong>
+        <small>❌ Falhas</small>
+      </div>
     </div>
 
-    <!-- Resultados -->
-    <pre id="result"></pre>
+    <div class="progress-container">
+      <div class="progress-bar" id="progressBar"></div>
+    </div>
+
+    <div class="stats-grid">
+      <div class="stat-card">
+        <strong id="estimatedTime">--</strong>
+        <small>⏱️ Próximo Lote</small>
+      </div>
+      <div class="stat-card">
+        <strong id="currentStatus">Desconectado</strong>
+        <small>📡 Status</small>
+      </div>
+    </div>
+
+    <!-- Lista de números processados -->
+    <div class="number-list">
+      <h3>📞 Números Processados</h3>
+      <div id="numberList">
+        <div class="empty-state">Nenhum número processado ainda.</div>
+      </div>
+    </div>
+
+    <!-- Logs em tempo real -->
+    <div class="realtime-log">
+      <h3>📋 Logs em Tempo Real</h3>
+      <div id="log"></div>
+    </div>
   </div>
 
   <script>
-    const form = document.getElementById('groupForm');
-    const result = document.getElementById('result');
-    const status = document.getElementById('status');
-    const submitBtn = document.getElementById('submitBtn');
-    const stopBtn = document.getElementById('stopBtn');
-    const disconnectBtn = document.getElementById('disconnectBtn');
+    // Elementos
     const sessionIdSelect = document.getElementById('sessionId');
     const qrLink = document.getElementById('qrLink');
+    const stopBtn = document.getElementById('stopBtn');
+    const disconnectBtn = document.getElementById('disconnectBtn');
+    const submitBtn = document.getElementById('submitBtn');
+    const groupForm = document.getElementById('groupForm');
+    const groupIdInput = document.getElementById('groupId');
+    const numbersInput = document.getElementById('numbers');
+    const refreshSessionsBtn = document.getElementById('refreshSessions');
 
+    // Estatísticas
     const totalQueuedEl = document.getElementById('totalQueued');
     const addedCountEl = document.getElementById('addedCount');
-    const remainingCountEl = document.getElementById('remainingCount');
+    const existsCountEl = document.getElementById('existsCount');
+    const errorCountEl = document.getElementById('errorCount');
     const estimatedTimeEl = document.getElementById('estimatedTime');
-    const currentBatchStatusEl = document.getElementById('currentBatchStatus');
+    const currentStatusEl = document.getElementById('currentStatus');
+    const progressBar = document.getElementById('progressBar');
+    const logEl = document.getElementById('log');
+    const numberListEl = document.getElementById('numberList');
 
-    let totalQueued = 0;
-    let addedCount = 0;
+    // Variáveis de estado
     let ws = null;
     let wsReconnectInterval = null;
     let wsPingInterval = null;
     let countdownInterval = null;
 
+    let totalQueued = 0;
+    let processedCount = 0;
+    let addedCount = 0;
+    let existsCount = 0;
+    let errorCount = 0;
+
+    let numberStatusMap = {}; // { "123456": "success" }
+
+    // Atualizar lista de sessões
+    async function loadSessions() {
+      try {
+        const res = await fetch('/sessions');
+        const sessions = await res.json();
+
+        sessionIdSelect.innerHTML = '';
+        sessions.forEach(s => {
+          const opt = document.createElement('option');
+          opt.value = s.sessionId;
+          opt.textContent = `${s.connected ? '🟢' : '🔴'} ${s.sessionId}`;
+          sessionIdSelect.appendChild(opt);
+        });
+
+        if (sessions.length === 0) {
+          const opt = document.createElement('option');
+          opt.textContent = 'Nenhuma sessão ativa';
+          opt.disabled = true;
+          sessionIdSelect.appendChild(opt);
+        }
+
+        updateQrLink();
+        connectWebSocket(sessionIdSelect.value);
+      } catch (err) {
+        console.error("Erro ao carregar sessões:", err);
+      }
+    }
+
     // Atualizar link do QR
     function updateQrLink() {
       const selected = sessionIdSelect.value;
+      if (!selected || selected === 'Nenhuma sessão ativa') return;
       qrLink.href = `/qr/${selected}`;
-      qrLink.textContent = `🔗 Escanear QR da ${selected}`;
+      qrLink.textContent = `🔗 Escanear QR: ${selected}`;
     }
-    sessionIdSelect.addEventListener('change', updateQrLink);
-    updateQrLink();
 
-    // Conectar WebSocket com reconexão inteligente
+    // Conectar WebSocket
     function connectWebSocket(sessionId) {
       if (ws) {
         ws.close();
@@ -196,18 +411,17 @@
       const host = window.location.host;
       const wsUrl = `${protocol}//${host}/ws/${sessionId}`;
 
-      console.log("🔌 Tentando conectar ao WebSocket:", wsUrl);
-      status.textContent = "🔄 Conectando ao servidor...";
+      console.log("🔌 Tentando conectar:", wsUrl);
+      currentStatusEl.textContent = "Conectando...";
 
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
-        console.log("🟢 Conectado ao WebSocket");
-        status.textContent = "✅ Conectado ao sistema";
-        if (wsReconnectInterval) clearInterval(wsReconnectInterval);
+        console.log("🟢 WebSocket conectado");
+        currentStatusEl.textContent = "Conectado ao servidor";
+        clearInterval(wsReconnectInterval);
         wsReconnectInterval = null;
 
-        // Envia ping a cada 30s para manter vivo
         wsPingInterval = setInterval(() => {
           if (ws && ws.readyState === WebSocket.OPEN) {
             ws.send(JSON.stringify({ type: "ping" }));
@@ -218,10 +432,11 @@
       ws.onclose = () => {
         console.log("🔴 WebSocket fechado");
         clearInterval(wsPingInterval);
-        wsPingInterval = null;
+        currentStatusEl.textContent = "Desconectado do servidor";
+        numberStatusMap = {};
+        renderNumberList();
 
         if (!wsReconnectInterval) {
-          status.textContent = "🔁 Reconectando em 5s...";
           wsReconnectInterval = setInterval(() => {
             if (!ws || ws.readyState === WebSocket.CLOSED) {
               connectWebSocket(sessionId);
@@ -230,188 +445,155 @@
         }
       };
 
-      ws.onerror = (err) => {
-        console.error("❌ Erro no WebSocket:", err);
-      };
+      ws.onerror = (err) => console.error("WebSocket error:", err);
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
         if (!data.sessionId || data.sessionId !== sessionId) return;
 
-        console.log("📡 Recebido:", data.type);
+        console.log("📡 Recebido:", data.type, data);
 
         switch (data.type) {
           case "qr_code":
-            status.textContent = "📱 Escaneie o QR para conectar.";
-            currentBatchStatusEl.textContent = "Aguardando login...";
+            currentStatusEl.textContent = "📱 Escaneie o QR";
             stopBtn.style.display = "none";
-            disconnectBtn.style.display = "none";
+            disconnectBtn.style.display = "inline-block";
+            clearStats();
             break;
 
           case "connected":
-            status.textContent = "✅ Conectado ao WhatsApp!";
-            currentBatchStatusEl.textContent = "Pronto para adicionar.";
+            currentStatusEl.textContent = "✅ Conectado ao WhatsApp";
             stopBtn.style.display = "inline-block";
             disconnectBtn.style.display = "inline-block";
+            addLog("✅ WhatsApp conectado com sucesso.", "info");
             break;
 
           case "disconnected":
-            status.textContent = "🔴 Desconectado do WhatsApp.";
-            currentBatchStatusEl.textContent = "Desconectado";
+            currentStatusEl.textContent = "🔴 Desconectado";
             stopBtn.style.display = "none";
             disconnectBtn.style.display = "none";
             clearInterval(countdownInterval);
-            break;
-
-          case "adding_now":
-            currentBatchStatusEl.textContent = `📞 Adicionando: ${data.numberAtual}`;
+            clearStats();
+            addLog("🔴 Desconectado do WhatsApp.", "error");
             break;
 
           case "batch_start":
-            status.textContent = `🚀 Iniciando lote de ${data.count} números...`;
+            addLog(`🚀 Iniciando lote de ${data.count} números...`, "info");
+            currentStatusEl.textContent = `Lote: ${data.count} números`;
+            break;
+
+          case "minilote_start":
+            addLog(`📦 Mini-lote ${data.miniloteIndex}/${data.totalMinilotes}: ${data.numbers.length} números`, "info");
+            break;
+
+          case "number_processed":
+            numberStatusMap[data.number] = data.status;
+            processedCount++;
+            if (data.status === "sucesso") addedCount++;
+            else if (data.status === "ja_existe") existsCount++;
+            else errorCount++;
+
+            updateStats();
+            renderNumberList();
+            updateProgressBar();
+
+            let msg = `📞 ${data.number} → `;
+            if (data.status === "sucesso") msg += "✅ Adicionado";
+            else if (data.status === "ja_existe") msg += "🔁 Já no grupo";
+            else msg += "❌ " + (data.message || "Erro");
+
+            addLog(msg, data.status === "sucesso" ? "success" : data.status === "ja_existe" ? "exists" : "error");
+            break;
+
+          case "waiting_minilote":
+            addLog(`⏳ Aguardando ${data.seconds}s para próximo mini-lote...`, "info");
             break;
 
           case "batch_done":
-            addedCount += data.lastBatchCount || 0;
-            const remaining = Math.max(0, totalQueued - addedCount);
-            totalQueuedEl.textContent = totalQueued;
-            addedCountEl.textContent = addedCount;
-            remainingCountEl.textContent = remaining;
-
+            addLog(`✅ Lote concluído: ${data.lastBatchCount} processados.`, "info");
             if (data.nextAddInMs) {
               estimatedTimeEl.textContent = formatTime(data.nextAddInMs / 1000);
               startCountdown(data.nextAddInMs);
-            } else {
-              estimatedTimeEl.textContent = "--";
-            }
-
-            result.textContent = "🟢 Lote concluído\n" + 
-              (data.results || []).map(r => `${r.number} → ${r.status}`).join('\n');
-
-            if (remaining === 0) {
-              status.textContent = "🎉 Todos os números foram processados!";
-              currentBatchStatusEl.textContent = "Finalizado";
             }
             break;
 
+          case "next_batch_scheduled":
+            addLog(`⏰ Próximo lote em ${data.delayMinutes} min. Restantes: ${data.remaining}`, "info");
+            break;
+
+          case "queue_completed":
+            addLog("🎉 ✅ Todos os números foram processados!", "success");
+            currentStatusEl.textContent = "Fila concluída";
+            estimatedTimeEl.textContent = "0m 0s";
+            clearInterval(countdownInterval);
+            break;
+
           case "stopped":
-            status.textContent = "⏸ Adição interrompida pelo usuário.";
-            currentBatchStatusEl.textContent = "Parado";
-            stopBtn.style.display = "none";
+            addLog("⏸ Adição interrompida pelo usuário.", "error");
+            currentStatusEl.textContent = "Parado";
             clearInterval(countdownInterval);
             break;
         }
       };
     }
 
-    // Parar adição
-    stopBtn.addEventListener('click', async () => {
-      const sessionId = sessionIdSelect.value;
-      try {
-        const res = await fetch(`/stop/${sessionId}`, { method: 'POST' });
-        if (res.ok) {
-          status.textContent = "⏸ Envios interrompidos.";
-        }
-      } catch (err) {
-        status.textContent = "❌ Falha ao parar.";
-      }
-    });
+    // Adicionar log
+    function addLog(text, type = "info") {
+      const entry = document.createElement('div');
+      entry.className = `log-entry status-${type}`;
+      entry.textContent = `[${new Date().toLocaleTimeString()}] ${text}`;
+      logEl.prepend(entry);
+    }
 
-    // Desconectar conta
-    disconnectBtn.addEventListener('click', async () => {
-      const sessionId = sessionIdSelect.value;
-      if (confirm(`Tem certeza que deseja desconectar a conta ${sessionId}?`)) {
-        try {
-          const res = await fetch(`/disconnect/${sessionId}`, { method: 'POST' });
-          if (res.ok) {
-            status.textContent = "🔓 Conta desconectada.";
-            currentBatchStatusEl.textContent = "Desconectado";
-            stopBtn.style.display = "none";
-            disconnectBtn.style.display = "none";
-          } else {
-            alert("Erro ao desconectar.");
-          }
-        } catch (err) {
-          alert("Falha ao desconectar: " + err.message);
-        }
+    // Renderizar lista de números
+    function renderNumberList() {
+      if (Object.keys(numberStatusMap).length === 0) {
+        numberListEl.innerHTML = '<div class="empty-state">Nenhum número processado ainda.</div>';
+        return;
       }
-    });
 
-    // Trocar de conta
-    sessionIdSelect.addEventListener('change', () => {
-      totalQueued = 0;
-      addedCount = 0;
-      updateStats();
-      connectWebSocket(sessionIdSelect.value);
-    });
+      numberListEl.innerHTML = '';
+      Object.entries(numberStatusMap).forEach(([num, status]) => {
+        const item = document.createElement('div');
+        item.className = 'number-item';
+        item.innerHTML = `
+          <span class="log-number">${num}</span>
+          <span class="number-status">
+            <span class="status-badge ${
+              status === 'sucesso' ? 'badge-success' :
+              status === 'ja_existe' ? 'badge-exists' : 'badge-error'
+            }">
+              ${status === 'sucesso' ? 'Adicionado' : status === 'ja_existe' ? 'Já no grupo' : 'Erro'}
+            </span>
+          </span>
+        `;
+        numberListEl.appendChild(item);
+      });
+    }
 
     // Atualizar estatísticas
     function updateStats() {
       totalQueuedEl.textContent = totalQueued;
       addedCountEl.textContent = addedCount;
-      remainingCountEl.textContent = Math.max(0, totalQueued - addedCount);
+      existsCountEl.textContent = existsCount;
+      errorCountEl.textContent = errorCount;
     }
 
-    // Enviar números
-    form.addEventListener('submit', async (e) => {
-      e.preventDefault();
-      clearInterval(countdownInterval);
-      result.textContent = "";
-      submitBtn.disabled = true;
-      stopBtn.style.display = "inline-block";
-      disconnectBtn.style.display = "inline-block";
-
-      const sessionId = sessionIdSelect.value;
-      const groupId = document.getElementById('groupId').value.trim();
-      const numbers = Array.from(
-        new Set(
-          document.getElementById('numbers').value
-            .split(',')
-            .map(n => n.trim())
-            .filter(n => n && /^\d+$/.test(n))
-        )
-      );
-
-      if (numbers.length === 0) {
-        status.textContent = "❌ Nenhum número válido.";
-        submitBtn.disabled = false;
-        return;
-      }
-
-      totalQueued = numbers.length;
+    function clearStats() {
+      processedCount = 0;
       addedCount = 0;
+      existsCount = 0;
+      errorCount = 0;
+      numberStatusMap = {};
       updateStats();
-      estimatedTimeEl.textContent = "--";
-      currentBatchStatusEl.textContent = "Enviado para fila...";
+      renderNumberList();
+      progressBar.style.width = '0%';
+    }
 
-      try {
-        const res = await fetch(`/adicionar/${sessionId}`, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ groupId, numbers })
-        });
-
-        const data = await res.json();
-
-        if (res.status === 429) {
-          status.textContent = `⏳ Aguarde ${data.nextAddInSeconds}s...`;
-          startCountdown(data.nextAddInSeconds * 1000);
-        } else if (res.ok) {
-          status.textContent = "✅ Processo iniciado. Aguarde os lotes.";
-        } else {
-          status.textContent = "❌ Erro: " + (data.error || "Desconhecido");
-          submitBtn.disabled = false;
-          stopBtn.style.display = "none";
-          disconnectBtn.style.display = "none";
-        }
-      } catch (err) {
-        status.textContent = "❌ Falha de conexão: " + err.message;
-        console.error("Erro de rede:", err);
-        submitBtn.disabled = false;
-        stopBtn.style.display = "none";
-        disconnectBtn.style.display = "none";
-      }
-    });
+    function updateProgressBar() {
+      const percent = totalQueued > 0 ? (processedCount / totalQueued) * 100 : 0;
+      progressBar.style.width = `${percent}%`;
+    }
 
     // Contagem regressiva
     function startCountdown(ms) {
@@ -423,9 +605,7 @@
         s--;
         if (s <= 0) {
           clearInterval(countdownInterval);
-          status.textContent = "✅ Pronto para novo envio.";
-          submitBtn.disabled = false;
-          estimatedTimeEl.textContent = "0m 0s";
+          estimatedTimeEl.textContent = "Pronto";
         } else {
           estimatedTimeEl.textContent = formatTime(s);
         }
@@ -438,8 +618,87 @@
       return `${m}m ${s}s`;
     }
 
-    // Iniciar WebSocket
-    connectWebSocket(sessionIdSelect.value);
+    // Eventos
+    sessionIdSelect.addEventListener('change', () => {
+      updateQrLink();
+      connectWebSocket(sessionIdSelect.value);
+    });
+
+    refreshSessionsBtn.addEventListener('click', loadSessions);
+
+    stopBtn.addEventListener('click', async () => {
+      const sessionId = sessionIdSelect.value;
+      try {
+        await fetch(`/stop/${sessionId}`, { method: 'POST' });
+        addLog("⏸ Adição interrompida.", "error");
+      } catch (err) {
+        addLog("❌ Falha ao parar.", "error");
+      }
+    });
+
+    disconnectBtn.addEventListener('click', async () => {
+      const sessionId = sessionIdSelect.value;
+      if (confirm(`Desconectar ${sessionId}?`)) {
+        try {
+          await fetch(`/disconnect/${sessionId}`, { method: 'POST' });
+          addLog("🔓 Conta desconectada.", "error");
+        } catch (err) {
+          addLog("❌ Falha ao desconectar.", "error");
+        }
+      }
+    });
+
+    groupForm.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      clearInterval(countdownInterval);
+      submitBtn.disabled = true;
+
+      const sessionId = sessionIdSelect.value;
+      const groupId = groupIdInput.value.trim();
+      const rawNumbers = numbersInput.value
+        .replace(/\s+/g, '')
+        .split(/[,;\n]+/)
+        .filter(n => n && /^\d+$/.test(n));
+
+      if (rawNumbers.length === 0) {
+        alert("❌ Nenhum número válido.");
+        submitBtn.disabled = false;
+        return;
+      }
+
+      // Resetar estatísticas
+      totalQueued = rawNumbers.length;
+      processedCount = 0;
+      addedCount = 0;
+      existsCount = 0;
+      errorCount = 0;
+      numberStatusMap = {};
+      updateStats();
+      updateProgressBar();
+      renderNumberList();
+
+      try {
+        const res = await fetch(`/adicionar/${sessionId}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ groupId, numbers: rawNumbers })
+        });
+
+        const data = await res.json();
+        if (res.ok) {
+          addLog(`✅ ${rawNumbers.length} números enviados para a fila.`, "success");
+        } else {
+          addLog(`❌ Erro: ${data.error}`, "error");
+        }
+      } catch (err) {
+        addLog(`❌ Falha: ${err.message}`, "error");
+      } finally {
+        submitBtn.disabled = false;
+      }
+    });
+
+    // Inicialização
+    loadSessions();
   </script>
 </body>
 </html>
