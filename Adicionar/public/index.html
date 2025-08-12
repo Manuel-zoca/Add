@@ -261,8 +261,8 @@
 
       <div class="links">
         <a href="#" id="qrLink" target="_blank" class="qr-link">🔗 Escanear QR</a>
-        <button id="stopBtn" class="btn btn-stop">⏸ Parar Envios</button>
-        <button id="disconnectBtn" class="btn btn-disconnect">❌ Desconectar</button>
+        <button id="stopBtn" class="btn btn-stop" style="display: none;">⏸ Parar Envios</button>
+        <button id="disconnectBtn" class="btn btn-disconnect" style="display: none;">❌ Desconectar</button>
       </div>
     </div>
 
@@ -270,8 +270,8 @@
       <label>ID do Grupo:</label>
       <input type="text" id="groupId" placeholder="1234567890@g.us" required />
 
-      <label>Números (um por linha ou separados por vírgula):</label>
-      <textarea id="numbers" placeholder="258840000000&#10;258870000000" required></textarea>
+      <label>Números (separados por vírgula, espaço ou quebra de linha):</label>
+      <textarea id="numbers" placeholder="258875078026, 27797393529, 258848630908" required></textarea>
 
       <button type="submit" id="submitBtn" class="btn btn-primary">🚀 Enviar para Fila</button>
     </form>
@@ -360,16 +360,25 @@
     let addedCount = 0;
     let existsCount = 0;
     let errorCount = 0;
+    let numberStatusMap = {};
 
-    let numberStatusMap = {}; // { "123456": "success" }
-
-    // Atualizar lista de sessões
+    // Carregar sessões ativas
     async function loadSessions() {
       try {
         const res = await fetch('/sessions');
         const sessions = await res.json();
 
         sessionIdSelect.innerHTML = '';
+        if (sessions.length === 0) {
+          const opt = document.createElement('option');
+          opt.textContent = 'Nenhuma sessão ativa';
+          opt.disabled = true;
+          sessionIdSelect.appendChild(opt);
+          qrLink.href = '#';
+          qrLink.textContent = '🔗 Nenhuma sessão';
+          return;
+        }
+
         sessions.forEach(s => {
           const opt = document.createElement('option');
           opt.value = s.sessionId;
@@ -377,24 +386,22 @@
           sessionIdSelect.appendChild(opt);
         });
 
-        if (sessions.length === 0) {
-          const opt = document.createElement('option');
-          opt.textContent = 'Nenhuma sessão ativa';
-          opt.disabled = true;
-          sessionIdSelect.appendChild(opt);
-        }
-
         updateQrLink();
         connectWebSocket(sessionIdSelect.value);
       } catch (err) {
         console.error("Erro ao carregar sessões:", err);
+        addLog("❌ Falha ao carregar sessões.", "error");
       }
     }
 
     // Atualizar link do QR
     function updateQrLink() {
       const selected = sessionIdSelect.value;
-      if (!selected || selected === 'Nenhuma sessão ativa') return;
+      if (!selected || selected === 'Nenhuma sessão ativa') {
+        qrLink.href = '#';
+        qrLink.textContent = '🔗 Nenhuma sessão';
+        return;
+      }
       qrLink.href = `/qr/${selected}`;
       qrLink.textContent = `🔗 Escanear QR: ${selected}`;
     }
@@ -417,10 +424,9 @@
       ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
-        console.log("🟢 WebSocket conectado");
+        console.log("🟢 Conectado ao WebSocket");
         currentStatusEl.textContent = "Conectado ao servidor";
         clearInterval(wsReconnectInterval);
-        wsReconnectInterval = null;
 
         wsPingInterval = setInterval(() => {
           if (ws && ws.readyState === WebSocket.OPEN) {
@@ -432,10 +438,7 @@
       ws.onclose = () => {
         console.log("🔴 WebSocket fechado");
         clearInterval(wsPingInterval);
-        currentStatusEl.textContent = "Desconectado do servidor";
-        numberStatusMap = {};
-        renderNumberList();
-
+        currentStatusEl.textContent = "Desconectado";
         if (!wsReconnectInterval) {
           wsReconnectInterval = setInterval(() => {
             if (!ws || ws.readyState === WebSocket.CLOSED) {
@@ -451,21 +454,20 @@
         const data = JSON.parse(event.data);
         if (!data.sessionId || data.sessionId !== sessionId) return;
 
-        console.log("📡 Recebido:", data.type, data);
-
         switch (data.type) {
           case "qr_code":
             currentStatusEl.textContent = "📱 Escaneie o QR";
             stopBtn.style.display = "none";
             disconnectBtn.style.display = "inline-block";
             clearStats();
+            addLog("📱 Escaneie o QR para conectar.", "info");
             break;
 
           case "connected":
             currentStatusEl.textContent = "✅ Conectado ao WhatsApp";
             stopBtn.style.display = "inline-block";
             disconnectBtn.style.display = "inline-block";
-            addLog("✅ WhatsApp conectado com sucesso.", "info");
+            addLog("✅ WhatsApp conectado com sucesso.", "success");
             break;
 
           case "disconnected":
@@ -480,10 +482,6 @@
           case "batch_start":
             addLog(`🚀 Iniciando lote de ${data.count} números...`, "info");
             currentStatusEl.textContent = `Lote: ${data.count} números`;
-            break;
-
-          case "minilote_start":
-            addLog(`📦 Mini-lote ${data.miniloteIndex}/${data.totalMinilotes}: ${data.numbers.length} números`, "info");
             break;
 
           case "number_processed":
@@ -510,21 +508,15 @@
             break;
 
           case "batch_done":
-            addLog(`✅ Lote concluído: ${data.lastBatchCount} processados.`, "info");
             if (data.nextAddInMs) {
               estimatedTimeEl.textContent = formatTime(data.nextAddInMs / 1000);
               startCountdown(data.nextAddInMs);
             }
             break;
 
-          case "next_batch_scheduled":
-            addLog(`⏰ Próximo lote em ${data.delayMinutes} min. Restantes: ${data.remaining}`, "info");
-            break;
-
           case "queue_completed":
-            addLog("🎉 ✅ Todos os números foram processados!", "success");
+            addLog("🎉 Fila concluída! Todos os números foram processados.", "success");
             currentStatusEl.textContent = "Fila concluída";
-            estimatedTimeEl.textContent = "0m 0s";
             clearInterval(countdownInterval);
             break;
 
@@ -537,7 +529,7 @@
       };
     }
 
-    // Adicionar log
+    // Funções auxiliares
     function addLog(text, type = "info") {
       const entry = document.createElement('div');
       entry.className = `log-entry status-${type}`;
@@ -545,7 +537,6 @@
       logEl.prepend(entry);
     }
 
-    // Renderizar lista de números
     function renderNumberList() {
       if (Object.keys(numberStatusMap).length === 0) {
         numberListEl.innerHTML = '<div class="empty-state">Nenhum número processado ainda.</div>';
@@ -571,7 +562,6 @@
       });
     }
 
-    // Atualizar estatísticas
     function updateStats() {
       totalQueuedEl.textContent = totalQueued;
       addedCountEl.textContent = addedCount;
@@ -595,7 +585,6 @@
       progressBar.style.width = `${percent}%`;
     }
 
-    // Contagem regressiva
     function startCountdown(ms) {
       clearInterval(countdownInterval);
       let s = Math.floor(ms / 1000);
@@ -655,13 +644,16 @@
 
       const sessionId = sessionIdSelect.value;
       const groupId = groupIdInput.value.trim();
+
+      // Processar números: vírgulas, espaços, quebras de linha
       const rawNumbers = numbersInput.value
-        .replace(/\s+/g, '')
-        .split(/[,;\n]+/)
+        .replace(/\s+/g, ',')  // Substitui espaços por vírgulas
+        .split(',')
+        .map(n => n.trim())
         .filter(n => n && /^\d+$/.test(n));
 
       if (rawNumbers.length === 0) {
-        alert("❌ Nenhum número válido.");
+        alert("❌ Nenhum número válido encontrado.");
         submitBtn.disabled = false;
         return;
       }
@@ -691,13 +683,13 @@
           addLog(`❌ Erro: ${data.error}`, "error");
         }
       } catch (err) {
-        addLog(`❌ Falha: ${err.message}`, "error");
+        addLog(`❌ Falha de conexão: ${err.message}`, "error");
       } finally {
         submitBtn.disabled = false;
       }
     });
 
-    // Inicialização
+    // Inicializar
     loadSessions();
   </script>
 </body>
