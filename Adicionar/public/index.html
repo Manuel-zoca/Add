@@ -97,6 +97,12 @@
       text-decoration: none;
       display: inline-block;
     }
+    .btn-small {
+      padding: 5px 10px;
+      font-size: 0.8rem;
+      margin-top: 10px;
+      background: #ff6b6b;
+    }
   </style>
 </head>
 <body>
@@ -116,6 +122,7 @@
     <!-- Link para escanear QR -->
     <div style="text-align: center; margin: 10px 0;">
       <a href="/qr/conta1" target="_blank" id="qrLink" class="qr-link">🔗 Escanear QR da Conta 1</a>
+      <button id="stopBtn" class="btn-small" style="display: none;">⏸ Parar Adição</button>
     </div>
 
     <!-- Formulário -->
@@ -130,11 +137,11 @@
 
     <!-- Status em tempo real -->
     <div id="liveStats">
-      <p>📦 Fila: <strong id="totalQueued">0</strong></p>
+      <p>📦 Fila Total: <strong id="totalQueued">0</strong></p>
       <p>✅ Adicionados: <strong id="addedCount">0</strong></p>
-      <p>⌛ Restantes: <strong id="remainingCount">0</strong></p>
-      <p>⏱️ Próximo em: <strong id="estimatedTime">--</strong></p>
-      <p>🚀 Status: <strong id="currentBatchStatus">Desconectado</strong></p>
+      <p>⏳ Restantes: <strong id="remainingCount">0</strong></p>
+      <p>⏱️ Próximo Lote em: <strong id="estimatedTime">--</strong></p>
+      <p>🚀 Status Atual: <strong id="currentBatchStatus">Desconectado</strong></p>
     </div>
 
     <!-- Resultados -->
@@ -146,8 +153,10 @@
     const result = document.getElementById('result');
     const status = document.getElementById('status');
     const submitBtn = document.getElementById('submitBtn');
+    const stopBtn = document.getElementById('stopBtn');
     const sessionIdSelect = document.getElementById('sessionId');
     const qrLink = document.getElementById('qrLink');
+
     const totalQueuedEl = document.getElementById('totalQueued');
     const addedCountEl = document.getElementById('addedCount');
     const remainingCountEl = document.getElementById('remainingCount');
@@ -156,9 +165,10 @@
 
     let totalQueued = 0;
     let addedCount = 0;
+    let ws = null;
     let countdownInterval = null;
 
-    // Atualizar link do QR com base na conta selecionada
+    // Atualizar link do QR
     function updateQrLink() {
       const selected = sessionIdSelect.value;
       qrLink.href = `/qr/${selected}`;
@@ -167,19 +177,24 @@
     sessionIdSelect.addEventListener('change', updateQrLink);
     updateQrLink();
 
-    // Função para conectar ao WebSocket da sessão
+    // Conectar WebSocket
     function connectWebSocket(sessionId) {
+      if (ws) {
+        ws.close();
+      }
+
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const host = window.location.host;
-      const ws = new WebSocket(`${protocol}//${host}/ws/${sessionId}`);
+      ws = new WebSocket(`${protocol}//${host}/ws/${sessionId}`);
 
       ws.onopen = () => {
         console.log("🟢 WebSocket conectado à sessão:", sessionId);
-        status.textContent = `✅ Conectado à conta ${sessionId}`;
+        status.textContent = `✅ Conectado ao sistema: ${sessionId}`;
       };
 
       ws.onclose = () => {
-        console.log("🔴 WebSocket desconectado. Tentando reconectar...");
+        console.log("🔴 WebSocket desconectado.");
+        currentBatchStatusEl.textContent = "Desconectado";
         setTimeout(() => connectWebSocket(sessionId), 3000);
       };
 
@@ -193,54 +208,93 @@
 
         console.log("📡 Recebido:", data.type);
 
-        if (data.type === "qr_code") {
-          status.textContent = "📱 Escaneie o QR em /qr";
-          currentBatchStatusEl.textContent = "Aguardando login...";
-        }
-        if (data.type === "connected") {
-          status.textContent = "✅ Conectado ao WhatsApp!";
-          currentBatchStatusEl.textContent = "Pronto para enviar.";
-        }
-        if (data.type === "adding_now") {
-          currentBatchStatusEl.textContent = `Adicionando: ${data.numberAtual}`;
-        }
-        if (data.type === "batch_done") {
-          addedCount += data.lastBatchCount;
-          const remaining = Math.max(0, totalQueued - addedCount);
-          totalQueuedEl.textContent = totalQueued;
-          addedCountEl.textContent = addedCount;
-          remainingCountEl.textContent = remaining;
-          estimatedTimeEl.textContent = formatTime(data.nextAddInMs / 1000);
-          result.textContent = "🟢 Lote finalizado\n" + 
-            data.results.map(r => `${r.number} — ${r.status}`).join('\n');
+        switch (data.type) {
+          case "qr_code":
+            status.textContent = "📱 Escaneie o QR para conectar.";
+            currentBatchStatusEl.textContent = "Aguardando login...";
+            break;
 
-          startCountdown(data.nextAddInMs);
-          setTimeout(() => {
+          case "connected":
+            status.textContent = "✅ Conectado ao WhatsApp!";
+            currentBatchStatusEl.textContent = "Pronto para adicionar.";
+            stopBtn.style.display = "inline-block";
+            break;
+
+          case "disconnected":
+            status.textContent = "🔴 Desconectado do WhatsApp.";
+            currentBatchStatusEl.textContent = "Desconectado";
+            stopBtn.style.display = "none";
+            clearInterval(countdownInterval);
+            break;
+
+          case "adding_now":
+            currentBatchStatusEl.textContent = `📞 Adicionando: ${data.numberAtual}`;
+            break;
+
+          case "batch_start":
+            status.textContent = `🚀 Iniciando lote de ${data.count} números...`;
+            currentBatchStatusEl.textContent = `Lote iniciado: ${data.count} números`;
+            break;
+
+          case "batch_done":
+            addedCount += data.lastBatchCount;
+            const remaining = Math.max(0, totalQueued - addedCount);
+            totalQueuedEl.textContent = totalQueued;
+            addedCountEl.textContent = addedCount;
+            remainingCountEl.textContent = remaining;
+            estimatedTimeEl.textContent = formatTime(data.nextAddInMs / 1000);
+            result.textContent = "🟢 Lote concluído\n" + 
+              data.results.map(r => `${r.number} → ${r.status}`).join('\n');
+
+            startCountdown(data.nextAddInMs);
             if (remaining === 0) {
               status.textContent = "🎉 Todos os números foram processados!";
               currentBatchStatusEl.textContent = "Finalizado";
+              stopBtn.style.display = "none";
             }
-          }, data.nextAddInMs);
+            break;
+
+          case "stopped":
+            status.textContent = "⏸ Adição interrompida pelo usuário.";
+            currentBatchStatusEl.textContent = "Parado";
+            stopBtn.style.display = "none";
+            clearInterval(countdownInterval);
+            break;
         }
       };
     }
 
-    // Iniciar WebSocket com a conta selecionada
-    function reconnectWebSocket() {
+    // Parar adição
+    stopBtn.addEventListener('click', async () => {
       const sessionId = sessionIdSelect.value;
-      connectWebSocket(sessionId);
-    }
+      try {
+        const res = await fetch(`/stop/${sessionId}`, { method: 'POST' });
+        if (res.ok) {
+          status.textContent = "⏸ Adição interrompida.";
+          stopBtn.style.display = "none";
+        }
+      } catch (err) {
+        status.textContent = "❌ Falha ao parar.";
+      }
+    });
+
+    // Reconectar ao mudar conta
     sessionIdSelect.addEventListener('change', () => {
       totalQueued = 0;
       addedCount = 0;
-      totalQueuedEl.textContent = "0";
-      addedCountEl.textContent = "0";
-      remainingCountEl.textContent = "0";
-      estimatedTimeEl.textContent = "--";
-      result.textContent = "";
-      reconnectWebSocket();
+      updateStats();
+      connectWebSocket(sessionIdSelect.value);
     });
-    reconnectWebSocket(); // Primeira conexão
+
+    // Primeira conexão
+    connectWebSocket(sessionIdSelect.value);
+
+    // Atualizar estatísticas
+    function updateStats() {
+      totalQueuedEl.textContent = totalQueued;
+      addedCountEl.textContent = addedCount;
+      remainingCountEl.textContent = Math.max(0, totalQueued - addedCount);
+    }
 
     // Enviar números
     form.addEventListener('submit', async (e) => {
@@ -248,6 +302,7 @@
       clearInterval(countdownInterval);
       result.textContent = "";
       submitBtn.disabled = true;
+      stopBtn.style.display = "inline-block";
 
       const sessionId = sessionIdSelect.value;
       const groupId = document.getElementById('groupId').value.trim();
@@ -268,11 +323,9 @@
 
       totalQueued = numbers.length;
       addedCount = 0;
-      totalQueuedEl.textContent = totalQueued;
-      addedCountEl.textContent = "0";
-      remainingCountEl.textContent = totalQueued;
+      updateStats();
       estimatedTimeEl.textContent = "--";
-      currentBatchStatusEl.textContent = "Processando...";
+      currentBatchStatusEl.textContent = "Enviado para fila...";
 
       try {
         const res = await fetch(`/adicionar/${sessionId}`, {
@@ -291,25 +344,31 @@
         } else {
           status.textContent = "❌ Erro: " + (data.error || "Desconhecido");
           submitBtn.disabled = false;
+          stopBtn.style.display = "none";
         }
       } catch (err) {
         status.textContent = "❌ Falha de conexão: " + err.message;
         console.error("Erro de rede:", err);
         submitBtn.disabled = false;
+        stopBtn.style.display = "none";
       }
     });
 
+    // Contagem regressiva
     function startCountdown(ms) {
       clearInterval(countdownInterval);
       let s = Math.floor(ms / 1000);
+      estimatedTimeEl.textContent = formatTime(s);
+
       countdownInterval = setInterval(() => {
+        s--;
         if (s <= 0) {
           clearInterval(countdownInterval);
           status.textContent = "✅ Pronto para novo envio.";
           submitBtn.disabled = false;
+          estimatedTimeEl.textContent = "0m 0s";
         } else {
-          status.textContent = `⏳ Aguarde ${formatTime(s)}...`;
-          s--;
+          estimatedTimeEl.textContent = formatTime(s);
         }
       }, 1000);
     }
