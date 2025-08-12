@@ -87,7 +87,7 @@
       max-height: 200px;
       overflow-y: auto;
     }
-    .qr-link {
+    .qr-link, .ctrl-btn {
       color: #6c63ff;
       background: white;
       padding: 8px 12px;
@@ -97,11 +97,13 @@
       text-decoration: none;
       display: inline-block;
     }
-    .btn-small {
-      padding: 5px 10px;
-      font-size: 0.8rem;
-      margin-top: 10px;
+    .ctrl-btn {
       background: #ff6b6b;
+      color: white;
+      border: none;
+      padding: 6px 10px;
+      margin-left: 10px;
+      cursor: pointer;
     }
   </style>
 </head>
@@ -119,10 +121,11 @@
       <option value="suporte">📱 Suporte</option>
     </select>
 
-    <!-- Link para escanear QR -->
+    <!-- Link QR + Botões de controle -->
     <div style="text-align: center; margin: 10px 0;">
       <a href="/qr/conta1" target="_blank" id="qrLink" class="qr-link">🔗 Escanear QR da Conta 1</a>
-      <button id="stopBtn" class="btn-small" style="display: none;">⏸ Parar Adição</button>
+      <button id="stopBtn" class="ctrl-btn" style="display: none;">⏸ Parar Envios</button>
+      <button id="disconnectBtn" class="ctrl-btn" style="display: none;">❌ Desconectar</button>
     </div>
 
     <!-- Formulário -->
@@ -154,6 +157,7 @@
     const status = document.getElementById('status');
     const submitBtn = document.getElementById('submitBtn');
     const stopBtn = document.getElementById('stopBtn');
+    const disconnectBtn = document.getElementById('disconnectBtn');
     const sessionIdSelect = document.getElementById('sessionId');
     const qrLink = document.getElementById('qrLink');
 
@@ -177,29 +181,34 @@
     sessionIdSelect.addEventListener('change', updateQrLink);
     updateQrLink();
 
-    // Conectar WebSocket
+    // Conectar WebSocket com URL dinâmica (funciona no Render)
     function connectWebSocket(sessionId) {
       if (ws) {
         ws.close();
       }
 
+      // Usa o domínio atual (funciona em localhost e no Render)
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const host = window.location.host;
-      ws = new WebSocket(`${protocol}//${host}/ws/${sessionId}`);
+      const wsUrl = `${protocol}//${host}/ws/${sessionId}`;
+      
+      ws = new WebSocket(wsUrl);
 
       ws.onopen = () => {
-        console.log("🟢 WebSocket conectado à sessão:", sessionId);
-        status.textContent = `✅ Conectado ao sistema: ${sessionId}`;
+        console.log("🟢 WebSocket conectado:", sessionId);
+        status.textContent = `✅ Conectado ao sistema`;
       };
 
       ws.onclose = () => {
-        console.log("🔴 WebSocket desconectado.");
+        console.log("🔴 WebSocket fechado. Tentando reconectar...");
         currentBatchStatusEl.textContent = "Desconectado";
+        status.textContent = "🔴 Desconectado do servidor";
         setTimeout(() => connectWebSocket(sessionId), 3000);
       };
 
       ws.onerror = (err) => {
         console.error("🔴 Erro no WebSocket:", err);
+        status.textContent = "❌ Erro de conexão com o servidor";
       };
 
       ws.onmessage = (event) => {
@@ -212,18 +221,22 @@
           case "qr_code":
             status.textContent = "📱 Escaneie o QR para conectar.";
             currentBatchStatusEl.textContent = "Aguardando login...";
+            stopBtn.style.display = "none";
+            disconnectBtn.style.display = "none";
             break;
 
           case "connected":
             status.textContent = "✅ Conectado ao WhatsApp!";
             currentBatchStatusEl.textContent = "Pronto para adicionar.";
             stopBtn.style.display = "inline-block";
+            disconnectBtn.style.display = "inline-block";
             break;
 
           case "disconnected":
             status.textContent = "🔴 Desconectado do WhatsApp.";
             currentBatchStatusEl.textContent = "Desconectado";
             stopBtn.style.display = "none";
+            disconnectBtn.style.display = "none";
             clearInterval(countdownInterval);
             break;
 
@@ -233,24 +246,29 @@
 
           case "batch_start":
             status.textContent = `🚀 Iniciando lote de ${data.count} números...`;
-            currentBatchStatusEl.textContent = `Lote iniciado: ${data.count} números`;
             break;
 
           case "batch_done":
-            addedCount += data.lastBatchCount;
+            addedCount += data.lastBatchCount || 0;
             const remaining = Math.max(0, totalQueued - addedCount);
             totalQueuedEl.textContent = totalQueued;
             addedCountEl.textContent = addedCount;
             remainingCountEl.textContent = remaining;
-            estimatedTimeEl.textContent = formatTime(data.nextAddInMs / 1000);
-            result.textContent = "🟢 Lote concluído\n" + 
-              data.results.map(r => `${r.number} → ${r.status}`).join('\n');
 
-            startCountdown(data.nextAddInMs);
+            if (data.nextAddInMs) {
+              estimatedTimeEl.textContent = formatTime(data.nextAddInMs / 1000);
+              startCountdown(data.nextAddInMs);
+            } else {
+              estimatedTimeEl.textContent = "--";
+            }
+
+            // Mostra resultados
+            result.textContent = "🟢 Lote concluído\n" + 
+              (data.results || []).map(r => `${r.number} → ${r.status}`).join('\n');
+
             if (remaining === 0) {
               status.textContent = "🎉 Todos os números foram processados!";
               currentBatchStatusEl.textContent = "Finalizado";
-              stopBtn.style.display = "none";
             }
             break;
 
@@ -270,11 +288,30 @@
       try {
         const res = await fetch(`/stop/${sessionId}`, { method: 'POST' });
         if (res.ok) {
-          status.textContent = "⏸ Adição interrompida.";
-          stopBtn.style.display = "none";
+          status.textContent = "⏸ Envios interrompidos.";
         }
       } catch (err) {
         status.textContent = "❌ Falha ao parar.";
+      }
+    });
+
+    // Desconectar conta
+    disconnectBtn.addEventListener('click', async () => {
+      const sessionId = sessionIdSelect.value;
+      if (confirm(`Tem certeza que deseja desconectar a conta ${sessionId}?`)) {
+        try {
+          const res = await fetch(`/disconnect/${sessionId}`, { method: 'POST' });
+          if (res.ok) {
+            status.textContent = "🔓 Conta desconectada.";
+            currentBatchStatusEl.textContent = "Desconectado";
+            stopBtn.style.display = "none";
+            disconnectBtn.style.display = "none";
+          } else {
+            alert("Erro ao desconectar.");
+          }
+        } catch (err) {
+          alert("Falha ao desconectar: " + err.message);
+        }
       }
     });
 
@@ -303,6 +340,7 @@
       result.textContent = "";
       submitBtn.disabled = true;
       stopBtn.style.display = "inline-block";
+      disconnectBtn.style.display = "inline-block";
 
       const sessionId = sessionIdSelect.value;
       const groupId = document.getElementById('groupId').value.trim();
@@ -345,12 +383,14 @@
           status.textContent = "❌ Erro: " + (data.error || "Desconhecido");
           submitBtn.disabled = false;
           stopBtn.style.display = "none";
+          disconnectBtn.style.display = "none";
         }
       } catch (err) {
         status.textContent = "❌ Falha de conexão: " + err.message;
         console.error("Erro de rede:", err);
         submitBtn.disabled = false;
         stopBtn.style.display = "none";
+        disconnectBtn.style.display = "none";
       }
     });
 
