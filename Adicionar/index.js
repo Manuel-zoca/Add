@@ -5,11 +5,10 @@ const WebSocket = require("ws");
 const QRCode = require("qrcode");
 const fs = require("fs-extra");
 const path = require("path");
-const { randomBytes } = require("crypto");
 
 const {
   default: makeWASocket,
-  useSingleFileAuthState,
+  useMultiFileAuthState,
   DisconnectReason,
   fetchLatestBaileysVersion,
   Browsers,
@@ -17,8 +16,7 @@ const {
 
 // 🔌 Configurações
 const PORT = process.env.PORT || 3000;
-const AUTH_DIR = path.join(__dirname, "auth");
-fs.ensureDirSync(AUTH_DIR);
+const AUTH_DIR = path.join(__dirname, "auth", "session"); // Pasta para autenticação
 
 // 🧠 Estado global
 let sock = null;
@@ -54,8 +52,9 @@ async function connectToWhatsApp() {
   if (sock) return;
 
   try {
-    const authFile = path.join(AUTH_DIR, "session.json");
-    const { state, saveCreds: _saveCreds } = await useSingleFileAuthState(authFile);
+    // ✅ Agora usamos useMultiFileAuthState (mesmo para 1 sessão)
+    await fs.ensureDir(AUTH_DIR);
+    const { state, saveCreds: _saveCreds } = await useMultiFileAuthState(AUTH_DIR);
     saveCreds = _saveCreds;
 
     const { version } = await fetchLatestBaileysVersion();
@@ -103,7 +102,7 @@ async function connectToWhatsApp() {
         console.log("🔌 Desconectado:", DisconnectReason[statusCode]);
 
         if (statusCode === DisconnectReason.loggedOut) {
-          await fs.remove(AUTH_DIR).catch(console.error);
+          await fs.remove(path.join(__dirname, "auth")).catch(console.error);
           sock = null;
           broadcast({ type: "disconnected", reason: "logged_out" });
         } else {
@@ -115,7 +114,7 @@ async function connectToWhatsApp() {
     });
   } catch (err) {
     console.error("❌ Erro ao conectar:", err);
-    broadcast({ type: "error", message: "Falha ao iniciar" });
+    broadcast({ type: "error", message: "Falha ao iniciar: " + err.message });
   }
 }
 
@@ -215,7 +214,7 @@ app.post("/stop", (req, res) => {
 app.post("/logout", async (req, res) => {
   if (sock) await sock.logout();
   sock = null;
-  await fs.remove(AUTH_DIR).catch(console.error);
+  await fs.remove(path.join(__dirname, "auth")).catch(console.error);
   broadcast({ type: "disconnected", reason: "manual" });
   res.json({ success: true });
 });
