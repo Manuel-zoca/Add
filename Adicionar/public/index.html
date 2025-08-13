@@ -5,6 +5,7 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
   <title>🔐 Adicionar ao Grupo WhatsApp</title>
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css" rel="stylesheet">
   <style>
     * {
       margin: 0;
@@ -40,6 +41,10 @@
     h1 {
       font-size: 1.8rem;
       font-weight: 700;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 10px;
     }
 
     .content {
@@ -55,6 +60,9 @@
       transition: all 0.3s;
       font-size: 1rem;
       margin-top: 10px;
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
     }
 
     .btn-primary {
@@ -69,6 +77,11 @@
 
     .btn-warning {
       background: #ff9800;
+      color: white;
+    }
+
+    .btn-success {
+      background: #4caf50;
       color: white;
     }
 
@@ -133,6 +146,7 @@
     .status-connecting { background: #fff3cd; color: #856404; }
     .status-connected { background: #d4edda; color: #155724; }
     .status-disconnected { background: #f8d7da; color: #721c24; }
+    .status-paused { background: #e3f2fd; color: #1976d2; }
 
     .stats-grid {
       display: grid;
@@ -188,12 +202,20 @@
     .log-error { border-left-color: #dc3545; }
     .log-info { border-left-color: #17a2b8; }
     .log-wait { border-left-color: #17a2b8; opacity: 0.8; }
+    .log-paused { border-left-color: #1976d2; }
+
+    .hidden { display: none !important; }
+
+    @media (max-width: 600px) {
+      .stats-grid { grid-template-columns: 1fr; }
+      .btn { font-size: 0.9rem; padding: 10px 16px; }
+    }
   </style>
 </head>
 <body>
   <div class="container">
     <header>
-      <h1>🔐 Adicionar ao Grupo WhatsApp</h1>
+      <h1><i class="fas fa-user-plus"></i> Adicionar ao Grupo WhatsApp</h1>
     </header>
 
     <div class="content">
@@ -201,10 +223,12 @@
       <div id="connectSection" class="section">
         <h2>1. Conectar ao WhatsApp</h2>
         <p>Clique no botão abaixo para gerar o QR Code e escanear com seu WhatsApp.</p>
-        <button id="connectBtn" class="btn btn-primary">📱 Conectar ao WhatsApp</button>
+        <button id="connectBtn" class="btn btn-primary">
+          <i class="fas fa-qrcode"></i> Conectar ao WhatsApp
+        </button>
 
         <div id="qrSection" class="qr-box hidden">
-          <h3>Escanee o QR Code</h3>
+          <h3><i class="fas fa-mobile-alt"></i> Escanee o QR Code</h3>
           <div id="qr"></div>
         </div>
       </div>
@@ -247,8 +271,20 @@
           <label>Números (separados por vírgula):</label>
           <textarea id="numbers" placeholder="258875078026, 27797393529" required></textarea>
 
-          <button type="submit" class="btn btn-primary">➕ Adicionar à Fila</button>
-          <button type="button" id="stopBtn" class="btn btn-warning">⏸ Parar Envios</button>
+          <div style="display: flex; gap: 10px; flex-wrap: wrap;">
+            <button type="submit" class="btn btn-primary">
+              <i class="fas fa-plus-circle"></i> Adicionar à Fila
+            </button>
+            <button type="button" id="pauseBtn" class="btn btn-warning">
+              <i class="fas fa-pause"></i> Pausar Envios
+            </button>
+            <button type="button" id="resumeBtn" class="btn btn-success hidden">
+              <i class="fas fa-play"></i> Retomar Envios
+            </button>
+            <button type="button" id="stopBtn" class="btn btn-danger">
+              <i class="fas fa-stop"></i> Parar Tudo
+            </button>
+          </div>
         </form>
       </div>
 
@@ -260,12 +296,15 @@
 
       <!-- Desconectar -->
       <div id="logoutSection" class="section hidden">
-        <button id="logoutBtn" class="btn btn-danger">❌ Desconectar</button>
+        <button id="logoutBtn" class="btn btn-danger">
+          <i class="fas fa-sign-out-alt"></i> Desconectar
+        </button>
       </div>
     </div>
   </div>
 
   <script>
+    // Elementos
     const connectBtn = document.getElementById('connectBtn');
     const qrSection = document.getElementById('qrSection');
     const qrDiv = document.getElementById('qr');
@@ -274,6 +313,8 @@
     const logSection = document.getElementById('logSection');
     const logoutSection = document.getElementById('logoutSection');
     const stopBtn = document.getElementById('stopBtn');
+    const pauseBtn = document.getElementById('pauseBtn');
+    const resumeBtn = document.getElementById('resumeBtn');
     const logoutBtn = document.getElementById('logoutBtn');
     const addForm = document.getElementById('addForm');
     const countdownSection = document.getElementById('countdownSection');
@@ -287,8 +328,10 @@
     const logEl = document.getElementById('log');
 
     let connected = false;
+    let paused = false;
     let countdownInterval = null;
 
+    // Funções de UI
     function showStatus(text, type) {
       statusEl.textContent = text;
       statusEl.className = `status status-${type}`;
@@ -344,6 +387,7 @@
       countdownSection.classList.add("hidden");
     }
 
+    // Conexão WebSocket
     function connectWebSocket() {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const host = window.location.host;
@@ -368,19 +412,23 @@
 
         if (data.type === "connected") {
           connected = true;
+          paused = false;
           qrSection.classList.add("hidden");
           statusSection.classList.remove("hidden");
           formSection.classList.remove("hidden");
           logSection.classList.remove("hidden");
           logoutSection.classList.remove("hidden");
           showStatus("✅ Conectado ao WhatsApp", "connected");
-          updateStats(data.stats);
+          updateStats(data.stats || {});
           addLog("✅ WhatsApp conectado com sucesso!", "success");
           stopCountdown();
+          pauseBtn.classList.remove("hidden");
+          resumeBtn.classList.add("hidden");
         }
 
         if (data.type === "disconnected") {
           connected = false;
+          paused = false;
           statusSection.classList.add("hidden");
           formSection.classList.add("hidden");
           logSection.classList.add("hidden");
@@ -389,6 +437,8 @@
           showStatus("🔴 Desconectado", "disconnected");
           addLog("🔴 Desconectado do WhatsApp.", "error");
           stopCountdown();
+          pauseBtn.classList.add("hidden");
+          resumeBtn.classList.add("hidden");
         }
 
         if (data.type === "number") {
@@ -410,13 +460,8 @@
         }
 
         if (data.type === "countdown") {
-          // Atualiza o temporizador em tempo real (útil se houver múltiplos clientes)
           if (countdownInterval && !countdownSection.classList.contains("hidden")) {
-            const remaining = data.seconds;
-            countdownTimer.textContent = formatTime(remaining);
-            if (remaining <= 0) {
-              countdownSection.classList.add("hidden");
-            }
+            countdownTimer.textContent = formatTime(data.seconds);
           }
         }
 
@@ -430,19 +475,37 @@
         }
 
         if (data.type === "stopped") {
-          addLog("⏸ Envios interrompidos.", "error");
+          addLog("🛑 Envios interrompidos.", "error");
           stopCountdown();
+        }
+
+        if (data.type === "paused") {
+          paused = true;
+          showStatus("⏸ Processamento pausado", "paused");
+          addLog("⏸ Envios pausados pelo usuário.", "paused");
+          pauseBtn.classList.add("hidden");
+          resumeBtn.classList.remove("hidden");
+          stopCountdown();
+        }
+
+        if (data.type === "resumed") {
+          paused = false;
+          showStatus("✅ Processamento retomado", "connected");
+          addLog("▶️ Envios retomados.", "success");
+          pauseBtn.classList.remove("hidden");
+          resumeBtn.classList.add("hidden");
         }
       };
     }
 
+    // Eventos
     connectBtn.addEventListener("click", async () => {
       connectBtn.disabled = true;
       try {
         await fetch("/connect", { method: "POST" });
         addLog("📱 Gerando QR Code...", "info");
       } catch (err) {
-        addLog("❌ Falha ao conectar.", "error");
+        addLog("❌ Falha ao conectar: " + err.message, "error");
         connectBtn.disabled = false;
       }
     });
@@ -476,9 +539,19 @@
       }
     });
 
+    pauseBtn.addEventListener("click", async () => {
+      await fetch("/pause", { method: "POST" });
+      addLog("⏸ Pausando envios...", "info");
+    });
+
+    resumeBtn.addEventListener("click", async () => {
+      await fetch("/resume", { method: "POST" });
+      addLog("▶️ Retomando envios...", "info");
+    });
+
     stopBtn.addEventListener("click", async () => {
       await fetch("/stop", { method: "POST" });
-      addLog("⏸ Envios parados.", "error");
+      addLog("🛑 Envios parados.", "error");
       stopCountdown();
     });
 
@@ -490,7 +563,7 @@
       }
     });
 
-    // Inicia conexão WebSocket
+    // Iniciar WebSocket
     connectWebSocket();
   </script>
 </body>
