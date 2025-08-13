@@ -16,20 +16,57 @@ const {
 
 // 🔌 Configurações
 const PORT = process.env.PORT || 3000;
-const AUTH_DIR = path.join(__dirname, "auth", "session");
-const FILA_FILE = path.join(__dirname, "data", "fila.json");
+const AUTH_DIR = path.join(__dirname, "auth");
+const DATA_DIR = path.join(__dirname, "data");
 
-// 🧠 Estado global
-let sock = null;
-let saveCreds = null;
-let qrCode = null;
-let connected = false;
-let fila = [];
-let emAdicao = false;
-let emPausa = false; // ✅ Novo: controle de pausa manual
-let totalAdicionados = 0;
-let totalJaExistem = 0;
-let totalFalhas = 0;
+// 🧠 Estado Global (para múltiplas sessões)
+const sessions = new Map(); // Map<sessionId, SessionData>
+
+// Estrutura de cada sessão
+class Session {
+  constructor(sessionId) {
+    this.sessionId = sessionId;
+    this.sock = null;
+    this.saveCreds = null;
+    this.qrCode = null;
+    this.connected = false;
+    this.fila = [];
+    this.emAdicao = false;
+    this.emPausa = false;
+    this.totalAdicionados = 0;
+    this.totalJaExistem = 0;
+    this.totalFalhas = 0;
+
+    this.authPath = path.join(AUTH_DIR, `session-${sessionId}`);
+    this.filaFile = path.join(DATA_DIR, `fila-${sessionId}.json`);
+  }
+
+  async loadFila() {
+    await fs.ensureDir(DATA_DIR);
+    if (await fs.pathExists(this.filaFile)) {
+      try {
+        this.fila = await fs.readJson(this.filaFile);
+        console.log(`✅ [${this.sessionId}] Fila carregada: ${this.fila.length} números`);
+      } catch (err) {
+        console.error(`❌ [${this.sessionId}] Erro ao carregar fila:`, err);
+        this.fila = [];
+      }
+    }
+  }
+
+  async saveFila() {
+    try {
+      await fs.ensureDir(DATA_DIR);
+      await fs.writeJson(this.filaFile, this.fila, { spaces: 2 });
+    } catch (err) {
+      console.error(`❌ [${this.sessionId}] Erro ao salvar fila:`, err);
+    }
+  }
+
+  broadcast(data) {
+    broadcast({ sessionId: this.sessionId, ...data });
+  }
+}
 
 // 🛠️ Inicialização
 const app = express();
@@ -49,42 +86,21 @@ function broadcast(data) {
   });
 }
 
-// 💾 Carregar fila salva
-async function carregarFila() {
-  await fs.ensureDir(path.dirname(FILA_FILE));
-  if (await fs.pathExists(FILA_FILE)) {
-    try {
-      fila = await fs.readJson(FILA_FILE);
-      console.log(`✅ Fila carregada: ${fila.length} números`);
-    } catch (err) {
-      console.error("❌ Erro ao carregar fila:", err);
-      fila = [];
-    }
-  }
-}
+// 🔧 Conectar WhatsApp (por sessão)
+async function connectToWhatsApp(sessionId) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
 
-// 💾 Salvar fila
-async function salvarFila() {
-  try {
-    await fs.ensureDir(path.dirname(FILA_FILE));
-    await fs.writeJson(FILA_FILE, fila, { spaces: 2 });
-  } catch (err) {
-    console.error("❌ Erro ao salvar fila:", err);
-  }
-}
-
-// 🔧 Conectar WhatsApp
-async function connectToWhatsApp() {
-  if (sock) return;
+  if (session.sock) return;
 
   try {
-    await fs.ensureDir(AUTH_DIR);
-    const { state, saveCreds: _saveCreds } = await useMultiFileAuthState(AUTH_DIR);
-    saveCreds = _saveCreds;
+    await fs.ensureDir(session.authPath);
+    const { state, saveCreds: _saveCreds } = await useMultiFileAuthState(session.authPath);
+    session.saveCreds = _saveCreds;
 
     const { version } = await fetchLatestBaileysVersion();
 
-    sock = makeWASocket({
+    session.sock = makeWASocket({
       version,
       auth: state,
       printQRInTerminal: false,
@@ -94,81 +110,85 @@ async function connectToWhatsApp() {
       emitOwnEvents: true,
     });
 
-    sock.ev.on("creds.update", saveCreds);
+    session.sock.ev.on("creds.update", session.saveCreds);
 
-    sock.ev.on("connection.update", async (update) => {
+    session.sock.ev.on("connection.update", async (update) => {
       const { qr, connection, lastDisconnect } = update;
 
       if (qr) {
         try {
-          qrCode = await QRCode.toDataURL(qr);
-          connected = false;
-          broadcast({ type: "qr", qr: qrCode });
+          session.qrCode = await QRCode.toDataURL(qr);
+          session.connected = false;
+          session.broadcast({ type: "qr", qr: session.qrCode });
         } catch (err) {
-          console.error("❌ Erro ao gerar QR:", err);
+          console.error(`❌ [${sessionId}] Erro ao gerar QR:`, err);
         }
       }
 
       if (connection === "open") {
-        connected = true;
-        qrCode = null;
-        console.log("✅ WhatsApp conectado!");
-        broadcast({
+        session.connected = true;
+        session.qrCode = null;
+        console.log(`✅ [${sessionId}] WhatsApp conectado!`);
+        session.broadcast({
           type: "connected",
-          user: sock.user,
-          stats: { totalAdicionados, totalJaExistem, totalFalhas },
-          queue: fila.length,
-          paused: emPausa,
+          user: session.sock.user,
+          stats: {
+            totalAdicionados: session.totalAdicionados,
+            totalJaExistem: session.totalJaExistem,
+            totalFalhas: session.totalFalhas,
+          },
+          queue: session.fila.length,
+          paused: session.emPausa,
         });
 
-        // ✅ Se houver fila pendente e não estiver pausado, retoma
-        if (fila.length > 0 && !emAdicao && !emPausa) {
-          console.log("🔄 Retomando processamento da fila...");
-          setTimeout(processarFila, 1000); // evitar bloqueio
+        if (session.fila.length > 0 && !session.emAdicao && !session.emPausa) {
+          console.log(`🔄 [${sessionId}] Retomando processamento da fila...`);
+          setTimeout(() => processarFila(sessionId), 1000);
         }
       }
 
       if (connection === "close") {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
-        console.log("🔌 Desconectado:", DisconnectReason[statusCode]);
+        console.log(`🔌 [${sessionId}] Desconectado:`, DisconnectReason[statusCode]);
 
         if (statusCode === DisconnectReason.loggedOut) {
-          await fs.remove(path.join(__dirname, "auth")).catch(console.error);
-          sock = null;
-          broadcast({ type: "disconnected", reason: "logged_out" });
+          await fs.remove(session.authPath).catch(console.error);
+          session.sock = null;
+          session.broadcast({ type: "disconnected", reason: "logged_out" });
         } else {
-          sock = null;
-          broadcast({ type: "disconnected", reason: "reconnecting" });
-          setTimeout(connectToWhatsApp, 5000);
+          session.sock = null;
+          session.broadcast({ type: "disconnected", reason: "reconnecting" });
+          setTimeout(() => connectToWhatsApp(sessionId), 5000);
         }
       }
     });
   } catch (err) {
-    console.error("❌ Erro ao conectar:", err);
-    broadcast({ type: "error", message: "Falha ao iniciar: " + err.message });
+    console.error(`❌ [${sessionId}] Erro ao conectar:`, err);
+    session.broadcast({ type: "error", message: "Falha ao iniciar: " + err.message });
   }
 }
 
-// 🚚 Processar fila com comportamento humano realista e pausa segura
-async function processarFila() {
-  if (emAdicao || !sock || fila.length === 0 || emPausa) return;
+// 🚚 Processar fila com pausa segura (por sessão)
+async function processarFila(sessionId) {
+  const session = sessions.get(sessionId);
+  if (!session) return;
+  if (session.emAdicao || !session.sock || session.fila.length === 0 || session.emPausa) return;
 
-  emAdicao = true;
+  session.emAdicao = true;
 
-  // ⏳ Intervalo entre lotes: 10 a 15 minutos
   const proximoLoteDelay = 60_000 * (10 + Math.random() * 5); // 10 a 15 min
 
-  while (fila.length > 0) {
-    if (emPausa) {
-      emAdicao = false;
-      broadcast({ type: "paused", message: "Processamento pausado pelo usuário." });
+  while (session.fila.length > 0) {
+    if (session.emPausa || !session.connected) {
+      session.emAdicao = false;
+      session.broadcast({ type: "paused", message: "Processamento pausado pelo usuário." });
       return;
     }
 
-    const lote = fila.splice(0, 5);
+    const lote = session.fila.splice(0, 5);
     const groupId = lote[0].groupId;
 
-    broadcast({
+    session.broadcast({
       type: "batch_start",
       count: lote.length,
       message: `Iniciando lote de ${lote.length} números...`,
@@ -178,37 +198,56 @@ async function processarFila() {
 
     for (const miniLote of miniLotes) {
       for (const item of miniLote.numeros) {
-        if (emPausa || !connected) {
-          emAdicao = false;
-          broadcast({ type: "paused", message: "Pausado durante mini-lote." });
+        if (session.emPausa || !session.connected) {
+          session.emAdicao = false;
+          session.broadcast({ type: "paused", message: "Pausado durante mini-lote." });
           return;
         }
 
         const num = item.number;
         try {
-          const metadata = await sock.groupMetadata(groupId).catch(() => null);
+          const metadata = await session.sock.groupMetadata(groupId).catch(() => null);
           if (!metadata) throw new Error("Grupo não encontrado");
 
           const exists = metadata.participants.some((p) => p.id === `${num}@s.whatsapp.net`);
           if (exists) {
-            totalJaExistem++;
-            broadcast({ type: "number", number: num, status: "exists", message: "Já no grupo" });
+            session.totalJaExistem++;
+            session.broadcast({
+              type: "number",
+              number: num,
+              status: "exists",
+              message: "Já no grupo",
+            });
           } else {
-            const res = await sock.groupParticipantsUpdate(groupId, [`${num}@s.whatsapp.net`], "add");
+            const res = await session.sock.groupParticipantsUpdate(
+              groupId,
+              [`${num}@s.whatsapp.net`],
+              "add"
+            );
             if (res[0]?.status === 200) {
-              totalAdicionados++;
-              broadcast({ type: "number", number: num, status: "success", message: "Adicionado" });
+              session.totalAdicionados++;
+              session.broadcast({
+                type: "number",
+                number: num,
+                status: "success",
+                message: "Adicionado",
+              });
             } else {
-              totalFalhas++;
-              broadcast({ type: "number", number: num, status: "error", message: "Erro no envio" });
+              session.totalFalhas++;
+              session.broadcast({
+                type: "number",
+                number: num,
+                status: "error",
+                message: "Erro no envio",
+              });
             }
           }
         } catch (err) {
-          totalFalhas++;
-          const message = err.message.includes("timeout") 
-            ? "Timeout ao adicionar" 
+          session.totalFalhas++;
+          const message = err.message.includes("timeout")
+            ? "Timeout ao adicionar"
             : err.message || "Erro desconhecido";
-          broadcast({
+          session.broadcast({
             type: "number",
             number: num,
             status: "error",
@@ -216,52 +255,58 @@ async function processarFila() {
           });
         }
 
-        // ✅ Delay entre números: 3 a 6 segundos
         await new Promise((r) => setTimeout(r, 3000 + Math.random() * 3000));
       }
 
       if (miniLote.pausa) {
         const pausaMs = miniLote.pausa * 1000;
-        broadcast({
+        session.broadcast({
           type: "mini_batch_pause",
           message: `Pausa de ${miniLote.pausa}s...`,
           pauseSeconds: miniLote.pausa,
         });
 
         for (let i = miniLote.pausa; i > 0; i--) {
-          if (emPausa || !connected) {
-            emAdicao = false;
+          if (session.emPausa || !session.connected) {
+            session.emAdicao = false;
             return;
           }
-          broadcast({ type: "countdown", seconds: i, message: `Próxima ação em ${i}s...` });
+          session.broadcast({
+            type: "countdown",
+            seconds: i,
+            message: `Próxima ação em ${i}s...`,
+          });
           await new Promise((r) => setTimeout(r, 1000));
         }
       }
     }
 
-    // ✅ Salva fila após cada lote
-    await salvarFila();
+    await session.saveFila();
 
-    broadcast({
+    session.broadcast({
       type: "batch_done",
-      stats: { totalAdicionados, totalJaExistem, totalFalhas },
-      nextAddInMs: fila.length > 0 ? proximoLoteDelay : 0,
+      stats: {
+        totalAdicionados: session.totalAdicionados,
+        totalJaExistem: session.totalJaExistem,
+        totalFalhas: session.totalFalhas,
+      },
+      nextAddInMs: session.fila.length > 0 ? proximoLoteDelay : 0,
     });
 
-    if (fila.length > 0 && !emPausa) {
+    if (session.fila.length > 0 && !session.emPausa) {
       const totalSeconds = Math.floor(proximoLoteDelay / 1000);
-      broadcast({
+      session.broadcast({
         type: "next_batch_countdown_start",
         message: `Próximo lote em ${totalSeconds}s...`,
         totalSeconds,
       });
 
       for (let i = totalSeconds; i > 0; i--) {
-        if (emPausa || !connected) {
-          emAdicao = false;
+        if (session.emPausa || !session.connected) {
+          session.emAdicao = false;
           return;
         }
-        broadcast({ type: "countdown", seconds: i, message: `Próximo lote em ${i}s...` });
+        session.broadcast({ type: "countdown", seconds: i, message: `Próximo lote em ${i}s...` });
         await new Promise((r) => setTimeout(r, 1000));
       }
     } else {
@@ -269,9 +314,9 @@ async function processarFila() {
     }
   }
 
-  emAdicao = false;
-  broadcast({ type: "queue_completed" });
-  await salvarFila(); // Salva fila vazia
+  session.emAdicao = false;
+  session.broadcast({ type: "queue_completed" });
+  await session.saveFila();
 }
 
 // 🔁 Cria mini-lotes com pausas humanizadas
@@ -302,80 +347,126 @@ function criarMiniLotes(numeros) {
   return lotes;
 }
 
-// 🌐 Rotas
+// 🌐 Rotas com sessionId
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
-app.post("/connect", async (req, res) => {
-  await connectToWhatsApp();
+// Listar todas as sessões
+app.get("/sessions", (req, res) => {
+  const list = Array.from(sessions.keys());
+  res.json({ sessions: list });
+});
+
+// Criar nova sessão
+app.post("/session/create", (req, res) => {
+  const { sessionId = `device-${Date.now()}` } = req.body;
+  if (sessions.has(sessionId)) {
+    return res.json({ success: false, error: "Sessão já existe." });
+  }
+
+  const session = new Session(sessionId);
+  sessions.set(sessionId, session);
+  session.loadFila(); // Carrega fila salva
+
+  res.json({ success: true, sessionId });
+});
+
+// Conectar sessão
+app.post("/session/:sessionId/connect", async (req, res) => {
+  const { sessionId } = req.params;
+  const session = sessions.get(sessionId);
+  if (!session) return res.status(404).json({ error: "Sessão não encontrada" });
+
+  await connectToWhatsApp(sessionId);
   res.json({ success: true });
 });
 
-app.post("/add", async (req, res) => {
+// Adicionar números à fila de uma sessão
+app.post("/session/:sessionId/add", async (req, res) => {
+  const { sessionId } = req.params;
   const { groupId, numbers } = req.body;
 
-  if (!connected) return res.json({ error: "Não conectado" });
+  const session = sessions.get(sessionId);
+  if (!session) return res.status(404).json({ error: "Sessão não encontrada" });
+  if (!session.connected) return res.json({ error: "Não conectado" });
 
   const validos = numbers
     .map((n) => n.toString().replace(/\D/g, ""))
     .filter((n) => n.length >= 8 && n.length <= 15);
 
-  validos.forEach((num) => fila.push({ groupId, number: num }));
-  await salvarFila();
+  validos.forEach((num) => session.fila.push({ groupId, number: num }));
+  await session.saveFila();
 
-  // ✅ Só inicia se não estiver pausado ou em adição
-  if (!emAdicao && !emPausa) {
-    processarFila();
+  if (!session.emAdicao && !session.emPausa) {
+    processarFila(sessionId);
   }
 
   res.json({ success: true, total: validos.length });
 });
 
-// ✅ Nova rota: PAUSAR
-app.post("/pause", (req, res) => {
-  if (emAdicao && !emPausa) {
-    emPausa = true;
-    broadcast({ type: "paused", message: "Processamento pausado." });
+// Pausar sessão
+app.post("/session/:sessionId/pause", (req, res) => {
+  const { sessionId } = req.params;
+  const session = sessions.get(sessionId);
+  if (!session) return res.status(404).json({ error: "Sessão não encontrada" });
+
+  if (session.emAdicao && !session.emPausa) {
+    session.emPausa = true;
+    session.broadcast({ type: "paused", message: "Processamento pausado." });
   }
-  res.json({ success: true, paused: emPausa });
+  res.json({ success: true, paused: session.emPausa });
 });
 
-// ✅ Nova rota: RESUMIR
-app.post("/resume", (req, res) => {
-  if (emPausa) {
-    emPausa = false;
-    broadcast({ type: "resumed", message: "Processamento retomado." });
-    if (fila.length > 0 && !emAdicao) {
-      setImmediate(processarFila);
+// Retomar sessão
+app.post("/session/:sessionId/resume", (req, res) => {
+  const { sessionId } = req.params;
+  const session = sessions.get(sessionId);
+  if (!session) return res.status(404).json({ error: "Sessão não encontrada" });
+
+  if (session.emPausa) {
+    session.emPausa = false;
+    session.broadcast({ type: "resumed", message: "Processamento retomado." });
+    if (session.fila.length > 0 && !session.emAdicao) {
+      setImmediate(() => processarFila(sessionId));
     }
   }
-  res.json({ success: true, paused: emPausa });
+  res.json({ success: true, paused: session.emPausa });
 });
 
-app.post("/stop", async (req, res) => {
-  fila = [];
-  emAdicao = false;
-  emPausa = false;
-  await salvarFila();
-  broadcast({ type: "stopped" });
+// Parar sessão (limpa fila)
+app.post("/session/:sessionId/stop", async (req, res) => {
+  const { sessionId } = req.params;
+  const session = sessions.get(sessionId);
+  if (!session) return res.status(404).json({ error: "Sessão não encontrada" });
+
+  session.fila = [];
+  session.emAdicao = false;
+  session.emPausa = false;
+  await session.saveFila();
+  session.broadcast({ type: "stopped" });
   res.json({ success: true });
 });
 
-app.post("/logout", async (req, res) => {
-  if (sock) await sock.logout();
-  sock = null;
-  emAdicao = false;
-  emPausa = false;
-  await fs.remove(path.join(__dirname, "auth")).catch(console.error);
-  await fs.remove(FILA_FILE).catch(console.error);
-  broadcast({ type: "disconnected", reason: "manual" });
+// Desconectar sessão (logout)
+app.post("/session/:sessionId/logout", async (req, res) => {
+  const { sessionId } = req.params;
+  const session = sessions.get(sessionId);
+  if (!session) return res.status(404).json({ error: "Sessão não encontrada" });
+
+  if (session.sock) await session.sock.logout();
+  session.sock = null;
+  session.emAdicao = false;
+  session.emPausa = false;
+  await fs.remove(session.authPath).catch(console.error);
+  await fs.remove(session.filaFile).catch(console.error);
+  session.broadcast({ type: "disconnected", reason: "manual" });
   res.json({ success: true });
 });
 
-// 🌐 WebSocket
+// WebSocket
 server.on("upgrade", (request, socket, head) => {
-  if (request.url === "/ws") {
+  if (request.url.startsWith("/ws")) {
     wss.handleUpgrade(request, socket, head, (ws) => {
       wss.emit("connection", ws, request);
     });
@@ -385,46 +476,81 @@ server.on("upgrade", (request, socket, head) => {
 });
 
 wss.on("connection", (ws) => {
-  if (qrCode) {
-    ws.send(JSON.stringify({ type: "qr", qr: qrCode }));
-  }
-  if (connected) {
+  // Envia estado de todas as sessões
+  for (const session of sessions.values()) {
+    if (session.qrCode) {
+      ws.send(JSON.stringify({ sessionId: session.sessionId, type: "qr", qr: session.qrCode }));
+    }
+    if (session.connected) {
+      ws.send(
+        JSON.stringify({
+          sessionId: session.sessionId,
+          type: "connected",
+          user: session.sock?.user,
+          stats: {
+            totalAdicionados: session.totalAdicionados,
+            totalJaExistem: session.totalJaExistem,
+            totalFalhas: session.totalFalhas,
+          },
+          queue: session.fila.length,
+          paused: session.emPausa,
+        })
+      );
+    }
     ws.send(
       JSON.stringify({
-        type: "connected",
-        user: sock?.user,
-        stats: { totalAdicionados, totalJaExistem, totalFalhas },
-        queue: fila.length,
-        paused: emPausa,
+        sessionId: session.sessionId,
+        type: "queue_update",
+        count: session.fila.length,
+        stats: {
+          totalAdicionados: session.totalAdicionados,
+          totalJaExistem: session.totalJaExistem,
+          totalFalhas: session.totalFalhas,
+        },
+        paused: session.emPausa,
       })
     );
   }
-  // ✅ Envia estado atual da fila
-  ws.send(
-    JSON.stringify({
-      type: "queue_update",
-      count: fila.length,
-      stats: { totalAdicionados, totalJaExistem, totalFalhas },
-      paused: emPausa,
-    })
-  );
 });
 
 // 🚀 Iniciar servidor
 async function startServer() {
-  // ✅ Evita múltiplos processos no Render
-  if (process.env.RENDER) {
-    console.log("🌍 Ambiente Render detectado. Usando PORT fornecida.");
-  }
+  await fs.ensureDir(AUTH_DIR);
+  await fs.ensureDir(DATA_DIR);
 
-  await carregarFila();
+  // Recuperar sessões salvas (pastas: session-* e arquivos fila-*.json)
+  const authDirs = await fs.readdir(AUTH_DIR);
+  const filaFiles = await fs.readdir(DATA_DIR);
+
+  const sessionIds = new Set();
+
+  authDirs.forEach((dir) => {
+    if (dir.startsWith("session-")) {
+      const id = dir.replace("session-", "");
+      sessionIds.add(id);
+    }
+  });
+
+  filaFiles.forEach((file) => {
+    if (file.startsWith("fila-") && file.endsWith(".json")) {
+      const id = file.replace("fila-", "").replace(".json", "");
+      sessionIds.add(id);
+    }
+  });
+
+  for (const id of sessionIds) {
+    const sessionId = `device-${id}`.replace("device-device-", "device-"); // evitar duplicado
+    const session = new Session(sessionId);
+    sessions.set(sessionId, session);
+    await session.loadFila();
+    console.log(`🔁 [${sessionId}] Sessão recuperada.`);
+  }
 
   server.listen(PORT, () => {
     console.log(`🚀 Servidor rodando na porta ${PORT}`);
     console.log(`👉 Acesse: http://localhost:${PORT}`);
+    console.log(`✅ Sessões carregadas: ${sessions.size}`);
   });
-
-  connectToWhatsApp();
 }
 
 startServer();
