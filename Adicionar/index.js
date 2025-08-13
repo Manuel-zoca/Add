@@ -26,7 +26,7 @@ let qrCode = null;
 let connected = false;
 let fila = [];
 let emAdicao = false;
-let paused = false; // NOVO: controle de pausa
+let emPausa = false; // ✅ Novo: controle de pausa manual
 let totalAdicionados = 0;
 let totalJaExistem = 0;
 let totalFalhas = 0;
@@ -49,19 +49,16 @@ function broadcast(data) {
   });
 }
 
-// 🔁 Carregar fila salva
+// 💾 Carregar fila salva
 async function carregarFila() {
   await fs.ensureDir(path.dirname(FILA_FILE));
   if (await fs.pathExists(FILA_FILE)) {
     try {
       fila = await fs.readJson(FILA_FILE);
       console.log(`✅ Fila carregada: ${fila.length} números`);
-      if (connected && fila.length > 0 && !emAdicao) {
-        console.log("🔄 Retomando processamento da fila...");
-        setImmediate(processarFila);
-      }
     } catch (err) {
       console.error("❌ Erro ao carregar fila:", err);
+      fila = [];
     }
   }
 }
@@ -69,6 +66,7 @@ async function carregarFila() {
 // 💾 Salvar fila
 async function salvarFila() {
   try {
+    await fs.ensureDir(path.dirname(FILA_FILE));
     await fs.writeJson(FILA_FILE, fila, { spaces: 2 });
   } catch (err) {
     console.error("❌ Erro ao salvar fila:", err);
@@ -78,6 +76,7 @@ async function salvarFila() {
 // 🔧 Conectar WhatsApp
 async function connectToWhatsApp() {
   if (sock) return;
+
   try {
     await fs.ensureDir(AUTH_DIR);
     const { state, saveCreds: _saveCreds } = await useMultiFileAuthState(AUTH_DIR);
@@ -101,34 +100,44 @@ async function connectToWhatsApp() {
       const { qr, connection, lastDisconnect } = update;
 
       if (qr) {
-        qrCode = await QRCode.toDataURL(qr);
-        connected = false;
-        broadcast({ type: "qr", qr: qrCode });
+        try {
+          qrCode = await QRCode.toDataURL(qr);
+          connected = false;
+          broadcast({ type: "qr", qr: qrCode });
+        } catch (err) {
+          console.error("❌ Erro ao gerar QR:", err);
+        }
       }
 
       if (connection === "open") {
         connected = true;
         qrCode = null;
-        paused = false;
-        emAdicao = false;
         console.log("✅ WhatsApp conectado!");
         broadcast({
           type: "connected",
           user: sock.user,
           stats: { totalAdicionados, totalJaExistem, totalFalhas },
+          queue: fila.length,
+          paused: emPausa,
         });
-        if (fila.length > 0 && !emAdicao) processarFila();
+
+        // ✅ Se houver fila pendente e não estiver pausado, retoma
+        if (fila.length > 0 && !emAdicao && !emPausa) {
+          console.log("🔄 Retomando processamento da fila...");
+          setTimeout(processarFila, 1000); // evitar bloqueio
+        }
       }
 
       if (connection === "close") {
         const statusCode = lastDisconnect?.error?.output?.statusCode;
         console.log("🔌 Desconectado:", DisconnectReason[statusCode]);
-        sock = null;
 
         if (statusCode === DisconnectReason.loggedOut) {
           await fs.remove(path.join(__dirname, "auth")).catch(console.error);
+          sock = null;
           broadcast({ type: "disconnected", reason: "logged_out" });
         } else {
+          sock = null;
           broadcast({ type: "disconnected", reason: "reconnecting" });
           setTimeout(connectToWhatsApp, 5000);
         }
@@ -140,27 +149,41 @@ async function connectToWhatsApp() {
   }
 }
 
-// 🚚 Processar fila
+// 🚚 Processar fila com comportamento humano realista e pausa segura
 async function processarFila() {
-  if (emAdicao || !sock || fila.length === 0) return;
+  if (emAdicao || !sock || fila.length === 0 || emPausa) return;
+
   emAdicao = true;
-  const proximoLoteDelay = 60_000 * (10 + Math.random() * 5);
+
+  // ⏳ Intervalo entre lotes: 10 a 15 minutos
+  const proximoLoteDelay = 60_000 * (10 + Math.random() * 5); // 10 a 15 min
 
   while (fila.length > 0) {
-    if (paused) {
-      console.log("⏸️ Processamento pausado...");
-      broadcast({ type: "paused" });
-      break;
+    if (emPausa) {
+      emAdicao = false;
+      broadcast({ type: "paused", message: "Processamento pausado pelo usuário." });
+      return;
     }
 
     const lote = fila.splice(0, 5);
     const groupId = lote[0].groupId;
-    broadcast({ type: "batch_start", count: lote.length });
+
+    broadcast({
+      type: "batch_start",
+      count: lote.length,
+      message: `Iniciando lote de ${lote.length} números...`,
+    });
 
     const miniLotes = criarMiniLotes(lote);
 
     for (const miniLote of miniLotes) {
       for (const item of miniLote.numeros) {
+        if (emPausa || !connected) {
+          emAdicao = false;
+          broadcast({ type: "paused", message: "Pausado durante mini-lote." });
+          return;
+        }
+
         const num = item.number;
         try {
           const metadata = await sock.groupMetadata(groupId).catch(() => null);
@@ -169,69 +192,93 @@ async function processarFila() {
           const exists = metadata.participants.some((p) => p.id === `${num}@s.whatsapp.net`);
           if (exists) {
             totalJaExistem++;
-            broadcast({ type: "number", number: num, status: "exists" });
+            broadcast({ type: "number", number: num, status: "exists", message: "Já no grupo" });
           } else {
             const res = await sock.groupParticipantsUpdate(groupId, [`${num}@s.whatsapp.net`], "add");
-
             if (res[0]?.status === 200) {
               totalAdicionados++;
-              broadcast({ type: "number", number: num, status: "success" });
-            } else if (res[0]?.status === 409) {
-              totalJaExistem++;
-              broadcast({ type: "number", number: num, status: "exists" });
-            } else if (res[0]?.status === 403) {
-              paused = true; // Bloqueio temporário → pausa
-              totalFalhas++;
-              broadcast({ type: "number", number: num, status: "blocked" });
-              console.log("⚠️ WhatsApp bloqueou adições temporariamente. Pausando...");
-              break;
+              broadcast({ type: "number", number: num, status: "success", message: "Adicionado" });
             } else {
               totalFalhas++;
-              broadcast({ type: "number", number: num, status: "error" });
+              broadcast({ type: "number", number: num, status: "error", message: "Erro no envio" });
             }
           }
         } catch (err) {
           totalFalhas++;
-          broadcast({ type: "number", number: num, status: "error", message: err.message });
+          const message = err.message.includes("timeout") 
+            ? "Timeout ao adicionar" 
+            : err.message || "Erro desconhecido";
+          broadcast({
+            type: "number",
+            number: num,
+            status: "error",
+            message,
+          });
         }
-        await delay(3000 + Math.random() * 3000);
+
+        // ✅ Delay entre números: 3 a 6 segundos
+        await new Promise((r) => setTimeout(r, 3000 + Math.random() * 3000));
       }
 
       if (miniLote.pausa) {
+        const pausaMs = miniLote.pausa * 1000;
+        broadcast({
+          type: "mini_batch_pause",
+          message: `Pausa de ${miniLote.pausa}s...`,
+          pauseSeconds: miniLote.pausa,
+        });
+
         for (let i = miniLote.pausa; i > 0; i--) {
-          broadcast({ type: "countdown", seconds: i });
-          await delay(1000);
+          if (emPausa || !connected) {
+            emAdicao = false;
+            return;
+          }
+          broadcast({ type: "countdown", seconds: i, message: `Próxima ação em ${i}s...` });
+          await new Promise((r) => setTimeout(r, 1000));
         }
       }
     }
 
+    // ✅ Salva fila após cada lote
     await salvarFila();
+
     broadcast({
       type: "batch_done",
       stats: { totalAdicionados, totalJaExistem, totalFalhas },
       nextAddInMs: fila.length > 0 ? proximoLoteDelay : 0,
     });
 
-    if (paused) break;
+    if (fila.length > 0 && !emPausa) {
+      const totalSeconds = Math.floor(proximoLoteDelay / 1000);
+      broadcast({
+        type: "next_batch_countdown_start",
+        message: `Próximo lote em ${totalSeconds}s...`,
+        totalSeconds,
+      });
 
-    if (fila.length > 0) {
-      for (let i = Math.floor(proximoLoteDelay / 1000); i > 0; i--) {
-        broadcast({ type: "countdown", seconds: i });
-        await delay(1000);
+      for (let i = totalSeconds; i > 0; i--) {
+        if (emPausa || !connected) {
+          emAdicao = false;
+          return;
+        }
+        broadcast({ type: "countdown", seconds: i, message: `Próximo lote em ${i}s...` });
+        await new Promise((r) => setTimeout(r, 1000));
       }
+    } else {
+      break;
     }
   }
 
   emAdicao = false;
-  if (!paused && fila.length === 0) {
-    broadcast({ type: "queue_completed" });
-    await salvarFila();
-  }
+  broadcast({ type: "queue_completed" });
+  await salvarFila(); // Salva fila vazia
 }
 
+// 🔁 Cria mini-lotes com pausas humanizadas
 function criarMiniLotes(numeros) {
   const total = numeros.length;
   const lotes = [];
+
   if (total === 5) {
     lotes.push({ numeros: numeros.slice(0, 2), pausa: 120 });
     lotes.push({ numeros: [numeros[2]], pausa: 60 });
@@ -251,11 +298,8 @@ function criarMiniLotes(numeros) {
   } else {
     lotes.push({ numeros, pausa: 0 });
   }
-  return lotes;
-}
 
-function delay(ms) {
-  return new Promise((r) => setTimeout(r, ms));
+  return lotes;
 }
 
 // 🌐 Rotas
@@ -270,6 +314,7 @@ app.post("/connect", async (req, res) => {
 
 app.post("/add", async (req, res) => {
   const { groupId, numbers } = req.body;
+
   if (!connected) return res.json({ error: "Não conectado" });
 
   const validos = numbers
@@ -279,28 +324,49 @@ app.post("/add", async (req, res) => {
   validos.forEach((num) => fila.push({ groupId, number: num }));
   await salvarFila();
 
-  if (!emAdicao) processarFila();
+  // ✅ Só inicia se não estiver pausado ou em adição
+  if (!emAdicao && !emPausa) {
+    processarFila();
+  }
+
   res.json({ success: true, total: validos.length });
 });
 
-app.post("/stop", async (req, res) => {
-  paused = true;
-  broadcast({ type: "paused" });
-  res.json({ success: true });
+// ✅ Nova rota: PAUSAR
+app.post("/pause", (req, res) => {
+  if (emAdicao && !emPausa) {
+    emPausa = true;
+    broadcast({ type: "paused", message: "Processamento pausado." });
+  }
+  res.json({ success: true, paused: emPausa });
 });
 
-app.post("/continue", async (req, res) => {
-  if (paused) {
-    paused = false;
-    processarFila();
-    broadcast({ type: "resumed" });
+// ✅ Nova rota: RESUMIR
+app.post("/resume", (req, res) => {
+  if (emPausa) {
+    emPausa = false;
+    broadcast({ type: "resumed", message: "Processamento retomado." });
+    if (fila.length > 0 && !emAdicao) {
+      setImmediate(processarFila);
+    }
   }
+  res.json({ success: true, paused: emPausa });
+});
+
+app.post("/stop", async (req, res) => {
+  fila = [];
+  emAdicao = false;
+  emPausa = false;
+  await salvarFila();
+  broadcast({ type: "stopped" });
   res.json({ success: true });
 });
 
 app.post("/logout", async (req, res) => {
   if (sock) await sock.logout();
   sock = null;
+  emAdicao = false;
+  emPausa = false;
   await fs.remove(path.join(__dirname, "auth")).catch(console.error);
   await fs.remove(FILA_FILE).catch(console.error);
   broadcast({ type: "disconnected", reason: "manual" });
@@ -319,28 +385,46 @@ server.on("upgrade", (request, socket, head) => {
 });
 
 wss.on("connection", (ws) => {
-  if (qrCode) ws.send(JSON.stringify({ type: "qr", qr: qrCode }));
+  if (qrCode) {
+    ws.send(JSON.stringify({ type: "qr", qr: qrCode }));
+  }
   if (connected) {
     ws.send(
       JSON.stringify({
         type: "connected",
         user: sock?.user,
         stats: { totalAdicionados, totalJaExistem, totalFalhas },
+        queue: fila.length,
+        paused: emPausa,
       })
     );
   }
-  ws.send(JSON.stringify({
-    type: "queue_update",
-    count: fila.length,
-    stats: { totalAdicionados, totalJaExistem, totalFalhas }
-  }));
+  // ✅ Envia estado atual da fila
+  ws.send(
+    JSON.stringify({
+      type: "queue_update",
+      count: fila.length,
+      stats: { totalAdicionados, totalJaExistem, totalFalhas },
+      paused: emPausa,
+    })
+  );
 });
 
-// 🚀 Start
-(async () => {
+// 🚀 Iniciar servidor
+async function startServer() {
+  // ✅ Evita múltiplos processos no Render
+  if (process.env.RENDER) {
+    console.log("🌍 Ambiente Render detectado. Usando PORT fornecida.");
+  }
+
   await carregarFila();
+
   server.listen(PORT, () => {
     console.log(`🚀 Servidor rodando na porta ${PORT}`);
+    console.log(`👉 Acesse: http://localhost:${PORT}`);
   });
+
   connectToWhatsApp();
-})();
+}
+
+startServer();
