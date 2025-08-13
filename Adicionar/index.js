@@ -55,6 +55,11 @@ async function carregarFila() {
     try {
       fila = await fs.readJson(FILA_FILE);
       console.log(`✅ Fila carregada: ${fila.length} números`);
+      // ✅ Se houver fila e estiver conectado, inicie o processamento
+      if (connected && fila.length > 0 && !emAdicao) {
+        console.log("🔄 Retomando processamento da fila...");
+        setImmediate(processarFila);
+      }
     } catch (err) {
       console.error("❌ Erro ao carregar fila:", err);
     }
@@ -116,7 +121,10 @@ async function connectToWhatsApp() {
           user: sock.user,
           stats: { totalAdicionados, totalJaExistem, totalFalhas },
         });
-        setImmediate(processarFila);
+        // ✅ Após conectar, retoma a fila se houver
+        if (fila.length > 0 && !emAdicao) {
+          processarFila();
+        }
       }
 
       if (connection === "close") {
@@ -146,7 +154,7 @@ async function processarFila() {
 
   emAdicao = true;
 
-  // ⏳ Intervalo entre lotes: 10 a 15 minutos (600_000 a 900_000 ms)
+  // ⏳ Intervalo entre lotes: 10 a 15 minutos
   const proximoLoteDelay = 60_000 * (10 + Math.random() * 5); // 10 a 15 min
 
   while (fila.length > 0) {
@@ -159,10 +167,8 @@ async function processarFila() {
       message: `Iniciando lote de ${lote.length} números...`,
     });
 
-    // 🔁 Dividir o lote em mini-lotes com comportamento humano
     const miniLotes = criarMiniLotes(lote);
 
-    let processed = 0;
     for (const miniLote of miniLotes) {
       for (const item of miniLote.numeros) {
         const num = item.number;
@@ -194,21 +200,17 @@ async function processarFila() {
           });
         }
 
-        // ⏳ Pausa entre números: 3 a 6 segundos
         await new Promise((r) => setTimeout(r, 3000 + Math.random() * 3000));
-        processed++;
       }
 
-      // 🛑 Pausa após mini-lote: duração específica (em ms)
       if (miniLote.pausa) {
         const pausaMs = miniLote.pausa * 1000;
         broadcast({
           type: "mini_batch_pause",
-          message: `Pausa de ${miniLote.pausa} segundos...`,
+          message: `Pausa de ${miniLote.pausa}s...`,
           pauseSeconds: miniLote.pausa,
         });
 
-        // Envia contagem regressiva em tempo real
         for (let i = miniLote.pausa; i > 0; i--) {
           broadcast({ type: "countdown", seconds: i, message: `Próxima ação em ${i}s...` });
           await new Promise((r) => setTimeout(r, 1000));
@@ -216,24 +218,24 @@ async function processarFila() {
       }
     }
 
-    // ✅ Lote completo processado
+    // ✅ Salva fila após cada lote (para sobreviver a reinícios)
+    await salvarFila();
+
     broadcast({
       type: "batch_done",
       stats: { totalAdicionados, totalJaExistem, totalFalhas },
       nextAddInMs: fila.length > 0 ? proximoLoteDelay : 0,
     });
 
-    // 🛑 Esperar 10 a 15 minutos antes do próximo lote
     if (fila.length > 0) {
-      const minutos = (proximoLoteDelay / 60_000).toFixed(1);
+      const totalSeconds = Math.floor(proximoLoteDelay / 1000);
       broadcast({
         type: "next_batch_countdown_start",
-        message: `Próximo lote em ${minutos} minutos.`,
-        totalSeconds: Math.floor(proximoLoteDelay / 1000),
+        message: `Próximo lote em ${totalSeconds}s...`,
+        totalSeconds,
       });
 
-      // Contagem regressiva em tempo real
-      for (let i = Math.floor(proximoLoteDelay / 1000); i > 0; i--) {
+      for (let i = totalSeconds; i > 0; i--) {
         broadcast({ type: "countdown", seconds: i, message: `Próximo lote em ${i}s...` });
         await new Promise((r) => setTimeout(r, 1000));
       }
@@ -242,19 +244,19 @@ async function processarFila() {
 
   emAdicao = false;
   broadcast({ type: "queue_completed" });
-  await salvarFila();
+  await salvarFila(); // Salva fila vazia
 }
 
-// 🔁 Cria mini-lotes com pausas humanizadas (ex: 2 → 2min, 1 → 1min, 1 → 30s)
+// 🔁 Cria mini-lotes com pausas humanizadas
 function criarMiniLotes(numeros) {
   const total = numeros.length;
   const lotes = [];
 
   if (total === 5) {
-    lotes.push({ numeros: numeros.slice(0, 2), pausa: 120 }); // 2 números → 2 min
-    lotes.push({ numeros: [numeros[2]], pausa: 60 });         // 1 número → 1 min
-    lotes.push({ numeros: [numeros[3]], pausa: 30 });         // 1 número → 30s
-    lotes.push({ numeros: [numeros[4]], pausa: 0 });          // último → sem pausa
+    lotes.push({ numeros: numeros.slice(0, 2), pausa: 120 });
+    lotes.push({ numeros: [numeros[2]], pausa: 60 });
+    lotes.push({ numeros: [numeros[3]], pausa: 30 });
+    lotes.push({ numeros: [numeros[4]], pausa: 0 });
   } else if (total === 4) {
     lotes.push({ numeros: numeros.slice(0, 2), pausa: 120 });
     lotes.push({ numeros: [numeros[2]], pausa: 60 });
@@ -274,7 +276,6 @@ function criarMiniLotes(numeros) {
 }
 
 // 🌐 Rotas
-
 app.get("/", (req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
@@ -340,17 +341,24 @@ wss.on("connection", (ws) => {
       })
     );
   }
-  // Envia estado atual da fila
-  ws.send(JSON.stringify({ type: "queue_update", count: fila.length }));
+  // ✅ Envia estado atual da fila
+  ws.send(JSON.stringify({ 
+    type: "queue_update", 
+    count: fila.length,
+    stats: { totalAdicionados, totalJaExistem, totalFalhas }
+  }));
 });
 
 // 🚀 Iniciar servidor
 async function startServer() {
-  await carregarFila(); // Carrega fila salva
+  await carregarFila(); // ✅ Carrega fila ao iniciar
   server.listen(PORT, () => {
     console.log(`🚀 Servidor rodando na porta ${PORT}`);
     console.log(`👉 Acesse: http://localhost:${PORT}`);
   });
+
+  // ✅ Reconecta automaticamente ao iniciar
+  connectToWhatsApp();
 }
 
 startServer();
