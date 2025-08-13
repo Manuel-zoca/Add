@@ -219,9 +219,19 @@
     </header>
 
     <div class="content">
-      <!-- Etapa 1: Conectar -->
-      <div id="connectSection" class="section">
-        <h2>1. Conectar ao WhatsApp</h2>
+      <!-- Etapa 1: Selecionar ou Criar Sessão -->
+      <div id="sessionSection" class="section">
+        <h2>1. Sessão do Dispositivo</h2>
+        <label>ID da Sessão (ex: meu-celular):</label>
+        <input type="text" id="sessionIdInput" placeholder="dispositivo-01" value="dispositivo-01" />
+        <button id="createSessionBtn" class="btn btn-primary">
+          <i class="fas fa-plus"></i> Criar/Usar Sessão
+        </button>
+      </div>
+
+      <!-- Etapa 2: Conectar -->
+      <div id="connectSection" class="section hidden">
+        <h2>2. Conectar ao WhatsApp</h2>
         <p>Clique no botão abaixo para gerar o QR Code e escanear com seu WhatsApp.</p>
         <button id="connectBtn" class="btn btn-primary">
           <i class="fas fa-qrcode"></i> Conectar ao WhatsApp
@@ -233,7 +243,7 @@
         </div>
       </div>
 
-      <!-- Etapa 2: Status -->
+      <!-- Etapa 3: Status -->
       <div id="statusSection" class="section hidden">
         <div id="status" class="status status-connected">✅ Conectado!</div>
 
@@ -261,9 +271,9 @@
         </div>
       </div>
 
-      <!-- Etapa 3: Formulário -->
+      <!-- Etapa 4: Formulário -->
       <div id="formSection" class="section hidden">
-        <h2>2. Adicionar Números ao Grupo</h2>
+        <h2>3. Adicionar Números ao Grupo</h2>
         <form id="addForm">
           <label>ID do Grupo (ex: 1234567890@g.us):</label>
           <input type="text" id="groupId" placeholder="1234567890@g.us" required />
@@ -304,19 +314,33 @@
   </div>
 
   <script>
+    // Estado global
+    let currentSessionId = null;
+    let connected = false;
+    let paused = false;
+    let countdownInterval = null;
+
     // Elementos
+    const sessionSection = document.getElementById('sessionSection');
+    const sessionIdInput = document.getElementById('sessionIdInput');
+    const createSessionBtn = document.getElementById('createSessionBtn');
+
+    const connectSection = document.getElementById('connectSection');
     const connectBtn = document.getElementById('connectBtn');
     const qrSection = document.getElementById('qrSection');
     const qrDiv = document.getElementById('qr');
+
     const statusSection = document.getElementById('statusSection');
     const formSection = document.getElementById('formSection');
     const logSection = document.getElementById('logSection');
     const logoutSection = document.getElementById('logoutSection');
+
     const stopBtn = document.getElementById('stopBtn');
     const pauseBtn = document.getElementById('pauseBtn');
     const resumeBtn = document.getElementById('resumeBtn');
     const logoutBtn = document.getElementById('logoutBtn');
     const addForm = document.getElementById('addForm');
+
     const countdownSection = document.getElementById('countdownSection');
     const countdownTitle = document.getElementById('countdownTitle');
     const countdownTimer = document.getElementById('countdownTimer');
@@ -326,10 +350,6 @@
     const existsCountEl = document.getElementById('existsCount');
     const errorCountEl = document.getElementById('errorCount');
     const logEl = document.getElementById('log');
-
-    let connected = false;
-    let paused = false;
-    let countdownInterval = null;
 
     // Funções de UI
     function showStatus(text, type) {
@@ -350,14 +370,12 @@
       errorCountEl.textContent = stats.totalFalhas || 0;
     }
 
-    // Formata segundos em MM:SS
     function formatTime(seconds) {
       const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
       const secs = (seconds % 60).toString().padStart(2, '0');
       return `${mins}:${secs}`;
     }
 
-    // Atualiza o temporizador
     function startCountdown(totalSeconds, title = "⏳ Tempo restante:") {
       countdownTitle.textContent = title;
       countdownSection.classList.remove("hidden");
@@ -387,21 +405,49 @@
       countdownSection.classList.add("hidden");
     }
 
-    // Conexão WebSocket
+    // Funções de API
+    async function createSession() {
+      const sessionId = sessionIdInput.value.trim() || 'default';
+      if (!sessionId) return alert('Digite um ID de sessão.');
+
+      try {
+        const res = await fetch('/session/create', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ sessionId })
+        });
+
+        if (res.ok) {
+          currentSessionId = sessionId;
+          addLog(`✅ Sessão criada: ${sessionId}`, 'success');
+          sessionSection.classList.add('hidden');
+          connectSection.classList.remove('hidden');
+        } else {
+          alert('Erro ao criar sessão.');
+        }
+      } catch (err) {
+        addLog(`❌ Falha ao criar sessão: ${err.message}`, 'error');
+      }
+    }
+
     function connectWebSocket() {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const host = window.location.host;
       const ws = new WebSocket(`${protocol}//${host}/ws`);
 
-      ws.onopen = () => console.log("🟢 WebSocket conectado");
+      ws.onopen = () => addLog("🟢 WebSocket conectado", "info");
       ws.onclose = () => {
         stopCountdown();
+        addLog("🔴 WebSocket desconectado. Tentando reconectar...", "error");
         setTimeout(connectWebSocket, 3000);
       };
       ws.onerror = (err) => console.error("WebSocket error:", err);
 
       ws.onmessage = (event) => {
         const data = JSON.parse(event.data);
+
+        // Ignora se não for da sessão atual
+        if (data.sessionId !== currentSessionId) return;
 
         if (data.type === "qr") {
           qrDiv.innerHTML = `<img src="${data.qr}" alt="QR Code" />`;
@@ -499,10 +545,13 @@
     }
 
     // Eventos
+    createSessionBtn.addEventListener("click", createSession);
+
     connectBtn.addEventListener("click", async () => {
+      if (!currentSessionId) return;
       connectBtn.disabled = true;
       try {
-        await fetch("/connect", { method: "POST" });
+        await fetch(`/session/${currentSessionId}/connect`, { method: "POST" });
         addLog("📱 Gerando QR Code...", "info");
       } catch (err) {
         addLog("❌ Falha ao conectar: " + err.message, "error");
@@ -512,6 +561,8 @@
 
     addForm.addEventListener("submit", async (e) => {
       e.preventDefault();
+      if (!currentSessionId || !connected) return alert("Não conectado.");
+
       const groupId = document.getElementById("groupId").value.trim();
       const rawNumbers = document.getElementById("numbers").value
         .replace(/\s/g, "")
@@ -522,7 +573,7 @@
       if (!groupId) return alert("❌ Digite o ID do grupo.");
 
       try {
-        const res = await fetch("/add", {
+        const res = await fetch(`/session/${currentSessionId}/add`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ groupId, numbers: rawNumbers })
@@ -540,30 +591,32 @@
     });
 
     pauseBtn.addEventListener("click", async () => {
-      await fetch("/pause", { method: "POST" });
+      if (!currentSessionId) return;
+      await fetch(`/session/${currentSessionId}/pause`, { method: "POST" });
       addLog("⏸ Pausando envios...", "info");
     });
 
     resumeBtn.addEventListener("click", async () => {
-      await fetch("/resume", { method: "POST" });
+      if (!currentSessionId) return;
+      await fetch(`/session/${currentSessionId}/resume`, { method: "POST" });
       addLog("▶️ Retomando envios...", "info");
     });
 
     stopBtn.addEventListener("click", async () => {
-      await fetch("/stop", { method: "POST" });
+      if (!currentSessionId) return;
+      await fetch(`/session/${currentSessionId}/stop`, { method: "POST" });
       addLog("🛑 Envios parados.", "error");
       stopCountdown();
     });
 
     logoutBtn.addEventListener("click", async () => {
-      if (confirm("Desconectar do WhatsApp?")) {
-        await fetch("/logout", { method: "POST" });
-        addLog("🔓 Desconectado.", "error");
-        stopCountdown();
-      }
+      if (!currentSessionId || !confirm("Desconectar do WhatsApp?")) return;
+      await fetch(`/session/${currentSessionId}/logout`, { method: "POST" });
+      addLog("🔓 Desconectado.", "error");
+      stopCountdown();
     });
 
-    // Iniciar WebSocket
+    // Iniciar WebSocket assim que possível
     connectWebSocket();
   </script>
 </body>
