@@ -48,7 +48,7 @@ function broadcast(data) {
   });
 }
 
-// 🔄 Carregar fila salva
+// 🔁 Carregar fila salva
 async function carregarFila() {
   await fs.ensureDir(path.dirname(FILA_FILE));
   if (await fs.pathExists(FILA_FILE)) {
@@ -140,30 +140,31 @@ async function connectToWhatsApp() {
   }
 }
 
-// 🚚 Processar fila com comportamento humano
+// 🚚 Processar fila com comportamento humano realista
 async function processarFila() {
   if (emAdicao || !sock || fila.length === 0) return;
 
   emAdicao = true;
 
-  // 🎲 Sorteia atraso entre lotes: 8 a 10 minutos
-  const proximoLoteDelay = 60_000 * (8 + Math.random() * 2);
+  // ⏳ Intervalo entre lotes: 10 a 15 minutos (600_000 a 900_000 ms)
+  const proximoLoteDelay = 60_000 * (10 + Math.random() * 5); // 10 a 15 min
 
   while (fila.length > 0) {
     const lote = fila.splice(0, 5);
     const groupId = lote[0].groupId;
 
-    broadcast({ type: "batch_start", count: lote.length, message: `Iniciando lote de ${lote.length} números...` });
+    broadcast({
+      type: "batch_start",
+      count: lote.length,
+      message: `Iniciando lote de ${lote.length} números...`,
+    });
 
-    // 🔁 Dividir o lote em mini-lotes (ex: [2,3], [1,4], [3,2])
-    const partes = dividirEmMiniLotes(lote.length);
-    let index = 0;
+    // 🔁 Dividir o lote em mini-lotes com comportamento humano
+    const miniLotes = criarMiniLotes(lote);
 
-    for (const tamanho of partes) {
-      const miniLote = lote.slice(index, index + tamanho);
-      index += tamanho;
-
-      for (const item of miniLote) {
+    let processed = 0;
+    for (const miniLote of miniLotes) {
+      for (const item of miniLote.numeros) {
         const num = item.number;
         try {
           const metadata = await sock.groupMetadata(groupId).catch(() => null);
@@ -185,18 +186,33 @@ async function processarFila() {
           }
         } catch (err) {
           totalFalhas++;
-          broadcast({ type: "number", number: num, status: "error", message: err.message });
+          broadcast({
+            type: "number",
+            number: num,
+            status: "error",
+            message: err.message || "Erro desconhecido",
+          });
         }
 
         // ⏳ Pausa entre números: 3 a 6 segundos
         await new Promise((r) => setTimeout(r, 3000 + Math.random() * 3000));
+        processed++;
       }
 
-      // 🛑 Pausa entre mini-lotes: 1 a 3 minutos
-      if (index < lote.length) {
-        const miniDelay = 60_000 * (1 + Math.random() * 2); // 1 a 3 min
-        broadcast({ type: "mini_batch_pause", seconds: Math.floor(miniDelay / 1000) });
-        await new Promise((r) => setTimeout(r, miniDelay));
+      // 🛑 Pausa após mini-lote: duração específica (em ms)
+      if (miniLote.pausa) {
+        const pausaMs = miniLote.pausa * 1000;
+        broadcast({
+          type: "mini_batch_pause",
+          message: `Pausa de ${miniLote.pausa} segundos...`,
+          pauseSeconds: miniLote.pausa,
+        });
+
+        // Envia contagem regressiva em tempo real
+        for (let i = miniLote.pausa; i > 0; i--) {
+          broadcast({ type: "countdown", seconds: i, message: `Próxima ação em ${i}s...` });
+          await new Promise((r) => setTimeout(r, 1000));
+        }
       }
     }
 
@@ -207,23 +223,54 @@ async function processarFila() {
       nextAddInMs: fila.length > 0 ? proximoLoteDelay : 0,
     });
 
-    // 🛑 Esperar 8 a 10 minutos antes do próximo lote
+    // 🛑 Esperar 10 a 15 minutos antes do próximo lote
     if (fila.length > 0) {
-      broadcast({ type: "next_batch_countdown", minutes: (proximoLoteDelay / 60_000).toFixed(1) });
-      await new Promise((r) => setTimeout(r, proximoLoteDelay));
+      const minutos = (proximoLoteDelay / 60_000).toFixed(1);
+      broadcast({
+        type: "next_batch_countdown_start",
+        message: `Próximo lote em ${minutos} minutos.`,
+        totalSeconds: Math.floor(proximoLoteDelay / 1000),
+      });
+
+      // Contagem regressiva em tempo real
+      for (let i = Math.floor(proximoLoteDelay / 1000); i > 0; i--) {
+        broadcast({ type: "countdown", seconds: i, message: `Próximo lote em ${i}s...` });
+        await new Promise((r) => setTimeout(r, 1000));
+      }
     }
   }
 
   emAdicao = false;
   broadcast({ type: "queue_completed" });
-  await salvarFila(); // Salva fila (vazia)
+  await salvarFila();
 }
 
-// 🔁 Divide um lote em 2 partes aleatórias (ex: 5 → [2,3], [1,4])
-function dividirEmMiniLotes(total) {
-  if (total <= 1) return [total];
-  const parte1 = Math.max(1, Math.min(total - 1, Math.floor(Math.random() * (total - 1) + 1)));
-  return [parte1, total - parte1];
+// 🔁 Cria mini-lotes com pausas humanizadas (ex: 2 → 2min, 1 → 1min, 1 → 30s)
+function criarMiniLotes(numeros) {
+  const total = numeros.length;
+  const lotes = [];
+
+  if (total === 5) {
+    lotes.push({ numeros: numeros.slice(0, 2), pausa: 120 }); // 2 números → 2 min
+    lotes.push({ numeros: [numeros[2]], pausa: 60 });         // 1 número → 1 min
+    lotes.push({ numeros: [numeros[3]], pausa: 30 });         // 1 número → 30s
+    lotes.push({ numeros: [numeros[4]], pausa: 0 });          // último → sem pausa
+  } else if (total === 4) {
+    lotes.push({ numeros: numeros.slice(0, 2), pausa: 120 });
+    lotes.push({ numeros: [numeros[2]], pausa: 60 });
+    lotes.push({ numeros: [numeros[3]], pausa: 0 });
+  } else if (total === 3) {
+    lotes.push({ numeros: [numeros[0]], pausa: 60 });
+    lotes.push({ numeros: [numeros[1]], pausa: 30 });
+    lotes.push({ numeros: [numeros[2]], pausa: 0 });
+  } else if (total === 2) {
+    lotes.push({ numeros: [numeros[0]], pausa: 60 });
+    lotes.push({ numeros: [numeros[1]], pausa: 0 });
+  } else {
+    lotes.push({ numeros, pausa: 0 });
+  }
+
+  return lotes;
 }
 
 // 🌐 Rotas
@@ -284,7 +331,17 @@ server.on("upgrade", (request, socket, head) => {
 
 wss.on("connection", (ws) => {
   if (qrCode) ws.send(JSON.stringify({ type: "qr", qr: qrCode }));
-  if (connected) ws.send(JSON.stringify({ type: "connected" }));
+  if (connected) {
+    ws.send(
+      JSON.stringify({
+        type: "connected",
+        user: sock?.user,
+        stats: { totalAdicionados, totalJaExistem, totalFalhas },
+      })
+    );
+  }
+  // Envia estado atual da fila
+  ws.send(JSON.stringify({ type: "queue_update", count: fila.length }));
 });
 
 // 🚀 Iniciar servidor
