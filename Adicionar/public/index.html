@@ -155,6 +155,26 @@
       margin-bottom: 4px;
     }
 
+    .countdown-box {
+      text-align: center;
+      padding: 15px;
+      background: #e3f2fd;
+      border-radius: 8px;
+      border: 1px solid #2196f3;
+      margin: 10px 0;
+    }
+
+    .countdown-box h4 {
+      margin-bottom: 8px;
+      color: #1976d2;
+    }
+
+    .countdown-box .timer {
+      font-size: 1.8rem;
+      font-weight: 700;
+      color: #1565c0;
+    }
+
     .log-entry {
       padding: 8px 12px;
       background: #f8f9fa;
@@ -168,10 +188,6 @@
     .log-error { border-left-color: #dc3545; }
     .log-info { border-left-color: #17a2b8; }
     .log-wait { border-left-color: #17a2b8; opacity: 0.8; }
-
-    .hidden {
-      display: none;
-    }
   </style>
 </head>
 <body>
@@ -210,6 +226,14 @@
             <strong id="errorCount">0</strong>
             <small>Falhas</small>
           </div>
+        </div>
+      </div>
+
+      <!-- Contagem Regressiva Global -->
+      <div id="countdownSection" class="section hidden">
+        <div class="countdown-box">
+          <h4 id="countdownTitle">⏳ Próxima ação em:</h4>
+          <div class="timer" id="countdownTimer">00:00</div>
         </div>
       </div>
 
@@ -252,6 +276,9 @@
     const stopBtn = document.getElementById('stopBtn');
     const logoutBtn = document.getElementById('logoutBtn');
     const addForm = document.getElementById('addForm');
+    const countdownSection = document.getElementById('countdownSection');
+    const countdownTitle = document.getElementById('countdownTitle');
+    const countdownTimer = document.getElementById('countdownTimer');
 
     const statusEl = document.getElementById('status');
     const addedCountEl = document.getElementById('addedCount');
@@ -260,6 +287,7 @@
     const logEl = document.getElementById('log');
 
     let connected = false;
+    let countdownInterval = null;
 
     function showStatus(text, type) {
       statusEl.textContent = text;
@@ -279,13 +307,53 @@
       errorCountEl.textContent = stats.totalFalhas || 0;
     }
 
+    // Formata segundos em MM:SS
+    function formatTime(seconds) {
+      const mins = Math.floor(seconds / 60).toString().padStart(2, '0');
+      const secs = (seconds % 60).toString().padStart(2, '0');
+      return `${mins}:${secs}`;
+    }
+
+    // Atualiza o temporizador
+    function startCountdown(totalSeconds, title = "⏳ Tempo restante:") {
+      countdownTitle.textContent = title;
+      countdownSection.classList.remove("hidden");
+      let remaining = totalSeconds;
+
+      if (countdownInterval) clearInterval(countdownInterval);
+
+      countdownTimer.textContent = formatTime(remaining);
+
+      countdownInterval = setInterval(() => {
+        remaining--;
+        if (remaining <= 0) {
+          countdownSection.classList.add("hidden");
+          clearInterval(countdownInterval);
+          countdownInterval = null;
+        } else {
+          countdownTimer.textContent = formatTime(remaining);
+        }
+      }, 1000);
+    }
+
+    function stopCountdown() {
+      if (countdownInterval) {
+        clearInterval(countdownInterval);
+        countdownInterval = null;
+      }
+      countdownSection.classList.add("hidden");
+    }
+
     function connectWebSocket() {
       const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
       const host = window.location.host;
       const ws = new WebSocket(`${protocol}//${host}/ws`);
 
       ws.onopen = () => console.log("🟢 WebSocket conectado");
-      ws.onclose = () => setTimeout(connectWebSocket, 3000);
+      ws.onclose = () => {
+        stopCountdown();
+        setTimeout(connectWebSocket, 3000);
+      };
       ws.onerror = (err) => console.error("WebSocket error:", err);
 
       ws.onmessage = (event) => {
@@ -295,6 +363,7 @@
           qrDiv.innerHTML = `<img src="${data.qr}" alt="QR Code" />`;
           qrSection.classList.remove("hidden");
           showStatus("📱 Escaneie o QR Code", "connecting");
+          stopCountdown();
         }
 
         if (data.type === "connected") {
@@ -307,6 +376,7 @@
           showStatus("✅ Conectado ao WhatsApp", "connected");
           updateStats(data.stats);
           addLog("✅ WhatsApp conectado com sucesso!", "success");
+          stopCountdown();
         }
 
         if (data.type === "disconnected") {
@@ -318,6 +388,7 @@
           qrSection.classList.add("hidden");
           showStatus("🔴 Desconectado", "disconnected");
           addLog("🔴 Desconectado do WhatsApp.", "error");
+          stopCountdown();
         }
 
         if (data.type === "number") {
@@ -329,11 +400,24 @@
         }
 
         if (data.type === "mini_batch_pause") {
-          addLog(`⏸ Pausa entre mini-lotes: aguarde ${data.seconds}s...`, "wait");
+          addLog(`⏸ Pausa entre mini-lotes: aguarde ${data.pauseSeconds}s...`, "wait");
+          startCountdown(data.pauseSeconds, `⏸ Pausa entre mini-lotes`);
         }
 
-        if (data.type === "next_batch_countdown") {
-          addLog(`⏳ Próximo lote em ~${data.minutes} minutos...`, "wait");
+        if (data.type === "next_batch_countdown_start") {
+          addLog(`⏳ Próximo lote em ~${(data.totalSeconds / 60).toFixed(1)} minutos...`, "wait");
+          startCountdown(data.totalSeconds, "⏳ Próximo lote em:");
+        }
+
+        if (data.type === "countdown") {
+          // Atualiza o temporizador em tempo real (útil se houver múltiplos clientes)
+          if (countdownInterval && !countdownSection.classList.contains("hidden")) {
+            const remaining = data.seconds;
+            countdownTimer.textContent = formatTime(remaining);
+            if (remaining <= 0) {
+              countdownSection.classList.add("hidden");
+            }
+          }
         }
 
         if (data.type === "batch_done") {
@@ -342,10 +426,12 @@
 
         if (data.type === "queue_completed") {
           addLog("🎉 Fila concluída!", "success");
+          stopCountdown();
         }
 
         if (data.type === "stopped") {
           addLog("⏸ Envios interrompidos.", "error");
+          stopCountdown();
         }
       };
     }
@@ -380,7 +466,7 @@
         });
 
         if (res.ok) {
-          addLog(`✅ ${rawNumbers.length} números na fila.`, "success");
+          addLog(`✅ ${rawNumbers.length} números adicionados à fila.`, "success");
         } else {
           const data = await res.json();
           addLog(`❌ Erro: ${data.error}`, "error");
@@ -393,15 +479,18 @@
     stopBtn.addEventListener("click", async () => {
       await fetch("/stop", { method: "POST" });
       addLog("⏸ Envios parados.", "error");
+      stopCountdown();
     });
 
     logoutBtn.addEventListener("click", async () => {
       if (confirm("Desconectar do WhatsApp?")) {
         await fetch("/logout", { method: "POST" });
         addLog("🔓 Desconectado.", "error");
+        stopCountdown();
       }
     });
 
+    // Inicia conexão WebSocket
     connectWebSocket();
   </script>
 </body>
