@@ -174,9 +174,20 @@ async function processarFila(sessionId) {
   if (!session) return;
   if (session.emAdicao || !session.sock || session.fila.length === 0 || session.emPausa) return;
 
+  // ✅ Limite diário para evitar banimento
+  if (session.totalAdicionados >= 100) {
+    session.broadcast({
+      type: "daily_limit",
+      message: "Limite diário de 100 contatos atingido. Reinicie amanhã.",
+    });
+    session.emAdicao = false;
+    return;
+  }
+
   session.emAdicao = true;
 
-  const proximoLoteDelay = 60_000 * (10 + Math.random() * 5); // 10 a 15 min
+  // ✅ Aumentado para 15-30 minutos entre lotes
+  const proximoLoteDelay = 60_000 * (15 + Math.random() * 15); // 15 a 30 minutos
 
   while (session.fila.length > 0) {
     if (session.emPausa || !session.connected) {
@@ -185,7 +196,8 @@ async function processarFila(sessionId) {
       return;
     }
 
-    const lote = session.fila.splice(0, 5);
+    // ✅ Máximo 3 por vez
+    const lote = session.fila.splice(0, Math.min(3, session.fila.length));
     const groupId = lote[0].groupId;
 
     session.broadcast({
@@ -255,7 +267,9 @@ async function processarFila(sessionId) {
           });
         }
 
-        await new Promise((r) => setTimeout(r, 3000 + Math.random() * 3000));
+        // ✅ Aumentado para 8-20 segundos entre adições
+        const delay = 8000 + Math.random() * 12000;
+        await new Promise((r) => setTimeout(r, delay));
       }
 
       if (miniLote.pausa) {
@@ -282,6 +296,13 @@ async function processarFila(sessionId) {
     }
 
     await session.saveFila();
+
+    // ✅ Simular atividade humana (leitura, navegação)
+    session.broadcast({
+      type: "simulating_activity",
+      message: "Revisando grupo e mensagens... (simulado)",
+    });
+    await new Promise((r) => setTimeout(r, 12000 + Math.random() * 8000)); // 12-20s
 
     session.broadcast({
       type: "batch_done",
@@ -319,29 +340,19 @@ async function processarFila(sessionId) {
   await session.saveFila();
 }
 
-// 🔁 Cria mini-lotes com pausas humanizadas
+// 🔁 Cria mini-lotes com pausas humanizadas e aleatórias
 function criarMiniLotes(numeros) {
-  const total = numeros.length;
   const lotes = [];
 
-  if (total === 5) {
-    lotes.push({ numeros: numeros.slice(0, 2), pausa: 120 });
-    lotes.push({ numeros: [numeros[2]], pausa: 60 });
-    lotes.push({ numeros: [numeros[3]], pausa: 30 });
-    lotes.push({ numeros: [numeros[4]], pausa: 0 });
-  } else if (total === 4) {
-    lotes.push({ numeros: numeros.slice(0, 2), pausa: 120 });
-    lotes.push({ numeros: [numeros[2]], pausa: 60 });
-    lotes.push({ numeros: [numeros[3]], pausa: 0 });
-  } else if (total === 3) {
-    lotes.push({ numeros: [numeros[0]], pausa: 60 });
-    lotes.push({ numeros: [numeros[1]], pausa: 30 });
-    lotes.push({ numeros: [numeros[2]], pausa: 0 });
-  } else if (total === 2) {
-    lotes.push({ numeros: [numeros[0]], pausa: 60 });
+  if (numeros.length === 1) {
+    lotes.push({ numeros: numeros, pausa: 0 });
+  } else if (numeros.length === 2) {
+    lotes.push({ numeros: [numeros[0]], pausa: 60 + Math.floor(Math.random() * 30) }); // 60-90s
     lotes.push({ numeros: [numeros[1]], pausa: 0 });
-  } else {
-    lotes.push({ numeros, pausa: 0 });
+  } else if (numeros.length >= 3) {
+    lotes.push({ numeros: [numeros[0]], pausa: 90 + Math.floor(Math.random() * 60) }); // 90-150s
+    lotes.push({ numeros: [numeros[1]], pausa: 60 + Math.floor(Math.random() * 60) }); // 60-120s
+    lotes.push({ numeros: [numeros[2]], pausa: 0 });
   }
 
   return lotes;
@@ -367,7 +378,7 @@ app.post("/session/create", (req, res) => {
 
   const session = new Session(sessionId);
   sessions.set(sessionId, session);
-  session.loadFila(); // Carrega fila salva
+  session.loadFila();
 
   res.json({ success: true, sessionId });
 });
@@ -391,14 +402,16 @@ app.post("/session/:sessionId/add", async (req, res) => {
   if (!session) return res.status(404).json({ error: "Sessão não encontrada" });
   if (!session.connected) return res.json({ error: "Não conectado" });
 
+  // ✅ Filtro mais rigoroso: apenas números válidos (10-13 dígitos) e sem duplicados
   const validos = numbers
     .map((n) => n.toString().replace(/\D/g, ""))
-    .filter((n) => n.length >= 8 && n.length <= 15);
+    .filter((n) => n.length >= 10 && n.length <= 13)
+    .filter((n, i, arr) => arr.indexOf(n) === i); // Remove duplicados
 
   validos.forEach((num) => session.fila.push({ groupId, number: num }));
   await session.saveFila();
 
-  if (!session.emAdicao && !session.emPausa) {
+  if (!session.emAdicao && !session.emPausa && session.totalAdicionados < 50) {
     processarFila(sessionId);
   }
 
@@ -427,7 +440,7 @@ app.post("/session/:sessionId/resume", (req, res) => {
   if (session.emPausa) {
     session.emPausa = false;
     session.broadcast({ type: "resumed", message: "Processamento retomado." });
-    if (session.fila.length > 0 && !session.emAdicao) {
+    if (session.fila.length > 0 && !session.emAdicao && session.totalAdicionados < 50) {
       setImmediate(() => processarFila(sessionId));
     }
   }
@@ -476,7 +489,6 @@ server.on("upgrade", (request, socket, head) => {
 });
 
 wss.on("connection", (ws) => {
-  // Envia estado de todas as sessões
   for (const session of sessions.values()) {
     if (session.qrCode) {
       ws.send(JSON.stringify({ sessionId: session.sessionId, type: "qr", qr: session.qrCode }));
@@ -518,7 +530,6 @@ async function startServer() {
   await fs.ensureDir(AUTH_DIR);
   await fs.ensureDir(DATA_DIR);
 
-  // Recuperar sessões salvas (pastas: session-* e arquivos fila-*.json)
   const authDirs = await fs.readdir(AUTH_DIR);
   const filaFiles = await fs.readdir(DATA_DIR);
 
@@ -539,7 +550,7 @@ async function startServer() {
   });
 
   for (const id of sessionIds) {
-    const sessionId = `device-${id}`.replace("device-device-", "device-"); // evitar duplicado
+    const sessionId = `device-${id}`.replace("device-device-", "device-");
     const session = new Session(sessionId);
     sessions.set(sessionId, session);
     await session.loadFila();
